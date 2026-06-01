@@ -1,0 +1,14 @@
+# 环境变量（含 API Key）
+.env
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 生成输出
+experiments/outputs/
+
+# IDE
+.vscode/
+.idea/
