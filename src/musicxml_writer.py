@@ -102,7 +102,7 @@ def gongche_to_musicxml(
                 rest_note = NoteEvent(
                     lyric="", lyric_modern_tone=0, lyric_is_entering=False,
                     lyric_guangyun_tone="", gongche="", gongche_pitch=0.0,
-                    duration=0.5, beat_id=-1, line_id=-1, lyric_id=-1,
+                    duration=0.125, beat_id=-1, line_id=-1, lyric_id=-1,
                     is_melisma=False, melisma_id=0, rhythm="",
                 )
                 rest_group = LyricNoteGroup(lyric="", lyric_modern_tone=0, lyric_is_entering=False, lyric_guangyun_tone="", notes=[rest_note])

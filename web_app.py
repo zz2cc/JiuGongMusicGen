@@ -347,34 +347,21 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 </div>
 
 <div id="compare-result-area" style="display:none">
-<div class="card" style="margin-bottom:10px"><div class="status-bar" id="compare-status"></div></div>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-<div class="card" style="border:2px solid #ff9800">
-<h2>Bare - 极简提示词</h2>
-<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
-<div style="text-align:center;padding:8px;background:#fff8e1;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#e65100" id="bare-overall">--</div><div style="font-size:10px;color:#8b6914">综合</div></div>
-<div style="text-align:center;padding:8px;background:#f1f8e9;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#33691e" id="bare-style">--</div><div style="font-size:10px;color:#558b2f">风格</div></div>
-<div style="text-align:center;padding:8px;background:#e3f2fd;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#0d47a1" id="bare-tone">--</div><div style="font-size:10px;color:#1976d2">声调</div></div>
+<div class="card" style="border:2px solid #ff9800;margin-bottom:12px">
+<h2>Bare vs Rich — 提示词工程提升对比</h2>
+<div style="font-size:11px;color:#888;margin-bottom:8px" id="compare-status"></div>
+<div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+<div style="flex:1;min-width:80px;text-align:center;padding:8px;background:#fff8e1;border-radius:6px">
+<div style="font-size:20px;font-weight:bold;color:#e65100" id="bare-overall">--</div><div style="font-size:10px">Bare综合</div></div>
+<div style="flex:1;min-width:80px;text-align:center;padding:8px;background:#fef3e0;border-radius:6px">
+<div style="font-size:20px;font-weight:bold;color:#8b4513" id="rich-overall">--</div><div style="font-size:10px">Rich综合</div></div>
+<div style="flex:1;min-width:80px;text-align:center;padding:8px;background:#e8f5e9;border-radius:6px">
+<div style="font-size:20px;font-weight:bold;color:#2e7d32" id="delta-overall">--</div><div style="font-size:10px">提升</div></div>
 </div>
-<div class="gongche-display" style="max-height:300px;font-size:14px" id="bare-gongche"></div>
-<div style="font-size:10px;color:#888;margin-top:4px" id="bare-meta"></div>
-<a class="download-btn" id="dl-bare-mxl" href="#" download="bare.musicxml" style="margin-top:6px">Download MusicXML (Bare)</a>
-</div>
-<div class="card" style="border:2px solid #2e7d32">
-<h2>Rich - 提示词工程</h2>
-<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
-<div style="text-align:center;padding:8px;background:#fef3e0;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#8b4513" id="rich-overall">--</div><div style="font-size:10px;color:#8b6914">综合</div></div>
-<div style="text-align:center;padding:8px;background:#e8f5e9;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#2e7d32" id="rich-style">--</div><div style="font-size:10px;color:#558b2f">风格</div></div>
-<div style="text-align:center;padding:8px;background:#e3f2fd;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#1565c0" id="rich-tone">--</div><div style="font-size:10px;color:#1976d2">声调</div></div>
-</div>
-<div class="gongche-display" style="max-height:300px;font-size:14px" id="rich-gongche"></div>
-<div style="font-size:10px;color:#888;margin-top:4px" id="rich-meta"></div>
-<a class="download-btn" id="dl-rich-mxl" href="#" download="rich.musicxml" style="margin-top:6px">Download MusicXML (Rich)</a>
-</div>
-</div>
-<div class="card" style="margin-top:12px">
-<h2>提示词工程提升效果</h2>
-<div id="compare-delta-table"></div>
+<div style="font-size:10px;color:#888;margin-bottom:4px" id="bare-meta"></div>
+<div class="gongche-display" style="max-height:160px;font-size:13px;margin-bottom:10px" id="bare-gongche"></div>
+<a class="download-btn alt" id="dl-bare-mxl" href="#" download="bare.musicxml">Download MusicXML (Bare)</a>
+<div id="compare-delta-table" style="margin-top:12px"></div>
 </div>
 </div>
 
@@ -562,38 +549,64 @@ if(d.error){alert(d.error);b.disabled=false;b.textContent="🎵 生成音乐";re
 
 lastResult = d;
 if (d.mode === "compare") {
+  // === 上部：Rich 数据填充正常 Tab 区 ===
+  document.getElementById("result-area").style.display = "block";
   document.getElementById("compare-result-area").style.display = "block";
-  document.getElementById("result-area").style.display = "none";
+
+  // 状态栏
+  document.getElementById("status-line").innerHTML = "Done | Bare:"+d.bare.tokens+"t "+d.bare.api_time+"s + Rich:"+d.rich.tokens+"t "+d.rich.api_time+"s";
+  document.getElementById("result-status").innerHTML =
+    "<span>Bare:"+d.bare.tokens+"t</span><span>Rich:"+d.rich.tokens+"t</span><span>Rich MusicXML</span>" +
+    (d.rich.saved_xml_path ? "<br><span style=\"font-size:11px\">"+escHtml(d.rich.saved_xml_path)+"</span>" : "");
+
+  // 工尺谱 Tab — Rich
+  var rawRich = d.rich.raw_response || "";
+  document.getElementById("gongche-output").innerHTML =
+    "<pre style=\"background:transparent;color:#5c2e0e;font-size:16px;line-height:2;letter-spacing:2px;max-height:500px;white-space:pre-wrap;padding:0;margin:0;\">" + escHtml(rawRich) + "</pre>";
+
+  // 提示词 / 原始响应 / 曲牌特征 Tab — Rich
+  document.getElementById("sys-prompt").textContent = d.rich.system_prompt;
+  document.getElementById("usr-prompt").textContent = d.rich.user_prompt;
+  document.getElementById("raw-resp").textContent = d.rich.raw_response;
+  document.getElementById("feat-data").textContent = JSON.stringify(d.qupai_features,null,2);
+
+  // MusicXML 下载 — Rich
+  if (d.rich.musicxml_b64) {
+    var mx2 = document.getElementById("dl-mxl");
+    mx2.href = "data:application/vnd.recordare.musicxml+xml;base64,"+d.rich.musicxml_b64;
+    mx2.download = "rich_"+q+"_"+l.replace(/\n/g,"").slice(0,8)+".musicxml";
+  }
+  var tx2 = document.getElementById("dl-txt");
+  tx2.href = "data:text/plain;charset=utf-8,"+encodeURIComponent(d.rich.raw_response);
+  tx2.download = "rich_"+q+"_"+l.replace(/\n/g,"").slice(0,8)+".txt";
+
+  // 定量评估 Tab — Rich（复用已有渲染函数）
+  if (d.rich.evaluation) { renderEval(d.rich.evaluation, "Rich | "); }
+  switchTab("gongche");
+
+  // === 下部：Bare 对比卡片 ===
   var pctC = function(v){ return (v != null && v >= 0) ? (v*100).toFixed(0)+"%" : "N/A"; };
   var dStr = function(v){ if (v==null) return "N/A"; var s=v>=0?"+":""; return s+(v*100).toFixed(0)+"%"; };
-  document.getElementById("status-line").innerHTML = "Done | Bare:"+d.bare.tokens+"t "+d.bare.api_time+"s | Rich:"+d.rich.tokens+"t "+d.rich.api_time+"s";
-  document.getElementById("compare-status").innerHTML = "<span>Bare:"+d.bare.tokens+"t "+d.bare.api_time+"s</span><span>Rich:"+d.rich.tokens+"t "+d.rich.api_time+"s</span>";
-  var be = d.bare.evaluation;
+  document.getElementById("compare-status").textContent = "Bare: "+d.bare.tokens+"t "+d.bare.api_time+"s | Rich: "+d.rich.tokens+"t "+d.rich.api_time+"s";
+
+  var be = d.bare && d.bare.evaluation;
+  var re = d.rich && d.rich.evaluation;
   if (be) {
     document.getElementById("bare-overall").textContent = pctC(be.overall_score);
-    document.getElementById("bare-style").textContent = pctC(be.style_overall);
-    document.getElementById("bare-tone").textContent = pctC(be.tone_overall);
-    document.getElementById("bare-meta").textContent = "Token:"+d.bare.tokens+" | "+d.bare.api_time+"s | "+d.bare.n_groups+" groups";
+    document.getElementById("rich-overall").textContent = pctC(re ? re.overall_score : 0);
+    var deltaOv = d.comparison ? d.comparison.overall_delta : 0;
+    document.getElementById("delta-overall").textContent = d.comparison ? dStr(deltaOv) : "N/A";
+    document.getElementById("delta-overall").style.color = (deltaOv >= 0) ? "#2e7d32" : "#c62828";
+    document.getElementById("bare-meta").textContent = "Bare工尺谱 (Token:"+d.bare.tokens+" | "+d.bare.api_time+"s | "+d.bare.n_groups+" groups)";
   }
-  document.getElementById("bare-gongche").innerHTML = "<pre style=\"background:transparent;color:#5c2e0e;font-size:14px;line-height:2;letter-spacing:2px;max-height:300px;white-space:pre-wrap;padding:0;margin:0;\">" + escHtml(d.bare.raw_response||"") + "</pre>";
+  document.getElementById("bare-gongche").innerHTML = "<pre style=\"background:transparent;color:#5c2e0e;font-size:13px;line-height:2;letter-spacing:2px;max-height:160px;white-space:pre-wrap;padding:0;margin:0;\">" + escHtml(d.bare.raw_response||"") + "</pre>";
   if (d.bare.musicxml_b64) {
-    var bm = document.getElementById("dl-bare-mxl");
-    bm.href = "data:application/vnd.recordare.musicxml+xml;base64,"+d.bare.musicxml_b64;
-    bm.download = "bare_"+q+"_"+l.replace(/\n/g,"").slice(0,8)+".musicxml";
+    var bm2 = document.getElementById("dl-bare-mxl");
+    bm2.href = "data:application/vnd.recordare.musicxml+xml;base64,"+d.bare.musicxml_b64;
+    bm2.download = "bare_"+q+"_"+l.replace(/\n/g,"").slice(0,8)+".musicxml";
   }
-  var re = d.rich.evaluation;
-  if (re) {
-    document.getElementById("rich-overall").textContent = pctC(re.overall_score);
-    document.getElementById("rich-style").textContent = pctC(re.style_overall);
-    document.getElementById("rich-tone").textContent = pctC(re.tone_overall);
-    document.getElementById("rich-meta").textContent = "Token:"+d.rich.tokens+" | "+d.rich.api_time+"s | "+d.rich.n_groups+" groups";
-  }
-  document.getElementById("rich-gongche").innerHTML = "<pre style=\"background:transparent;color:#5c2e0e;font-size:14px;line-height:2;letter-spacing:2px;max-height:300px;white-space:pre-wrap;padding:0;margin:0;\">" + escHtml(d.rich.raw_response||"") + "</pre>";
-  if (d.rich.musicxml_b64) {
-    var rm = document.getElementById("dl-rich-mxl");
-    rm.href = "data:application/vnd.recordare.musicxml+xml;base64,"+d.rich.musicxml_b64;
-    rm.download = "rich_"+q+"_"+l.replace(/\n/g,"").slice(0,8)+".musicxml";
-  }
+
+  // 差异表
   if (d.comparison) {
     var cmp = d.comparison;
     var sn = {"format_compliance":"格式合规","pitch_distribution":"音高分布","interval_distribution":"音程分布","density_match":"密度","melisma_match":"拖腔","boundary_match":"起收音","range_match":"音域"};
@@ -603,7 +616,7 @@ if (d.mode === "compare") {
     var rSS = re ? re.style_scores : {};
     for (var sk in sn) {
       var bv = bSS[sk]||0; var rv = rSS[sk]||0; var dv = cmp.style_delta ? (cmp.style_delta[sk]||0) : (rv-bv);
-      stl += "<tr style=\"border-bottom:1px solid #eee\"><td>"+sn[sk]+"</td><td>"+pctC(bv)+"</td><td>"+pctC(rv)+"</td><td style=\"color:"+(dv>=0?"#2e7d32":"#c62828")+";font-weight:bold\">"+(dv>=0?"+ ":"v ")+dStr(dv)+"</td></tr>";
+      stl += "<tr style=\"border-bottom:1px solid #eee\"><td>"+sn[sk]+"</td><td>"+pctC(bv)+"</td><td>"+pctC(rv)+"</td><td style=\"color:"+(dv>=0?"#2e7d32":"#c62828")+";font-weight:bold\">"+(dv>=0?"▲ ":"▼ ")+dStr(dv)+"</td></tr>";
     }
     var bTS = be ? be.tone_scores : {};
     var rTS = re ? re.tone_scores : {};
@@ -611,18 +624,18 @@ if (d.mode === "compare") {
       var btv = (bTS[tk] != null && bTS[tk] >= 0) ? bTS[tk] : 0;
       var rtv = (rTS[tk] != null && rTS[tk] >= 0) ? rTS[tk] : 0;
       var dtv = cmp.tone_delta ? (cmp.tone_delta[tk]||0) : (rtv-btv);
-      stl += "<tr style=\"border-bottom:1px solid #eee\"><td>声调-"+tn[tk]+"</td><td>"+pctC(btv)+"</td><td>"+pctC(rtv)+"</td><td style=\"color:"+(dtv>=0?"#2e7d32":"#c62828")+";font-weight:bold\">"+(dtv>=0?"+ ":"v ")+dStr(dtv)+"</td></tr>";
+      stl += "<tr style=\"border-bottom:1px solid #eee\"><td>声调-"+tn[tk]+"</td><td>"+pctC(btv)+"</td><td>"+pctC(rtv)+"</td><td style=\"color:"+(dtv>=0?"#2e7d32":"#c62828")+";font-weight:bold\">"+(dtv>=0?"▲ ":"▼ ")+dStr(dtv)+"</td></tr>";
     }
     var bSt = be ? be.style_overall : 0; var bTo = be ? be.tone_overall : 0; var bOv = be ? be.overall_score : 0;
     var rSt = re ? re.style_overall : 0; var rTo = re ? re.tone_overall : 0; var rOv = re ? re.overall_score : 0;
-    stl += "<tr style=\"border-top:2px solid #d4a574;font-weight:bold;background:#fef9f0\"><td>风格综合</td><td>"+pctC(bSt)+"</td><td>"+pctC(rSt)+"</td><td style=\"color:"+(cmp.style_overall_delta>=0?"#2e7d32":"#c62828")+"\">"+(cmp.style_overall_delta>=0?"+ ":"v ")+dStr(cmp.style_overall_delta)+"</td></tr>";
-    stl += "<tr style=\"font-weight:bold;background:#fef9f0\"><td>声调综合</td><td>"+pctC(bTo)+"</td><td>"+pctC(rTo)+"</td><td style=\"color:"+(cmp.tone_overall_delta>=0?"#2e7d32":"#c62828")+"\">"+(cmp.tone_overall_delta>=0?"+ ":"v ")+dStr(cmp.tone_overall_delta)+"</td></tr>";
-    stl += "<tr style=\"font-weight:bold;background:#fef3e0;font-size:14px\"><td>综合评分</td><td>"+pctC(bOv)+"</td><td>"+pctC(rOv)+"</td><td style=\"color:"+(cmp.overall_delta>=0?"#2e7d32":"#c62828")+"\">"+(cmp.overall_delta>=0?"+ ":"v ")+dStr(cmp.overall_delta)+"</td></tr>";
+    stl += "<tr style=\"border-top:2px solid #d4a574;font-weight:bold;background:#fef9f0\"><td>风格综合</td><td>"+pctC(bSt)+"</td><td>"+pctC(rSt)+"</td><td style=\"color:"+((cmp.style_overall_delta||0)>=0?"#2e7d32":"#c62828")+"\">"+((cmp.style_overall_delta||0)>=0?"▲ ":"▼ ")+dStr(cmp.style_overall_delta)+"</td></tr>";
+    stl += "<tr style=\"font-weight:bold;background:#fef9f0\"><td>声调综合</td><td>"+pctC(bTo)+"</td><td>"+pctC(rTo)+"</td><td style=\"color:"+((cmp.tone_overall_delta||0)>=0?"#2e7d32":"#c62828")+"\">"+((cmp.tone_overall_delta||0)>=0?"▲ ":"▼ ")+dStr(cmp.tone_overall_delta)+"</td></tr>";
+    stl += "<tr style=\"font-weight:bold;background:#fef3e0;font-size:14px\"><td>综合评分</td><td>"+pctC(bOv)+"</td><td>"+pctC(rOv)+"</td><td style=\"color:"+((cmp.overall_delta||0)>=0?"#2e7d32":"#c62828")+"\">"+((cmp.overall_delta||0)>=0?"▲ ":"▼ ")+dStr(cmp.overall_delta)+"</td></tr>";
     stl += "</table>";
     document.getElementById("compare-delta-table").innerHTML = stl;
   }
   b.disabled = false;
-  b.textContent = "Generate Music";
+  b.textContent = "🎵 生成音乐";
   return;
 }
 document.getElementById("compare-result-area").style.display = "none";
@@ -653,15 +666,15 @@ tx.download = q+"_"+l.replace(/\n/g,"").slice(0,8)+".txt";
 switchTab("gongche");
 
 // ---- 渲染定量评估 ----
-if(d.evaluation){
-  var e = d.evaluation;
+function renderEval(e, prefix) {
+  prefix = prefix || "";
   var pct = function(v){ return (v != null && v >= 0) ? (v*100).toFixed(0)+"%" : "N/A"; };
   document.getElementById("eval-overall").textContent = pct(e.overall_score);
   document.getElementById("eval-style").textContent = pct(e.style_overall);
   document.getElementById("eval-tone").textContent = pct(e.tone_overall);
   document.getElementById("eval-tone-rule").textContent = pct(e.tone_rule_overall);
   document.getElementById("eval-tone-data").textContent = pct(e.tone_data_overall);
-  document.getElementById("eval-meta").textContent = "评估时间: " + (e.timestamp || '') + " | 曲牌: " + (e.qupai || '') + " | 歌词: " + (e.lyrics || '').slice(0,20);
+  document.getElementById("eval-meta").textContent = prefix + (e.timestamp || '') + " | " + (e.qupai || '') + " | " + (e.lyrics || '').slice(0,20);
 
   // 风格指标
   var styleNames = {"format_compliance":"格式合规","pitch_distribution":"音高分布匹配","interval_distribution":"音程分布匹配","density_match":"密度匹配","melisma_match":"拖腔匹配","boundary_match":"起收音匹配","range_match":"音域匹配"};
@@ -758,7 +771,6 @@ if(d.evaluation){
   // 渲染指标计算说明
   if(e.metric_descriptions){
     var descHtml = '';
-    // Style composite indicators
     var styleKeys = ['format_compliance','pitch_distribution','interval_distribution','density_match','melisma_match','boundary_match','range_match','style_overall'];
     var toneKeys = ['tone_rule_scores','tone_data_scores','tone_overall'];
     var allKeys = styleKeys.concat(toneKeys).concat(['overall_score']);
@@ -768,14 +780,16 @@ if(d.evaluation){
         descHtml += '<div style="margin:6px 0;padding:6px 8px;border-left:3px solid #d4a574;background:#fefdf8">';
         descHtml += '<b style="color:#6b3410">'+escHtml(d.label)+'</b>';
         descHtml += '<div style="color:#5c3a1e;margin-top:1px">'+escHtml(d.method)+'</div>';
-        descHtml += '<div style="color:#8b6914;font-size:10px;margin-top:1px">📂 参考: '+escHtml(d.reference)+'</div>';
-        descHtml += '<div style="color:#808080;font-size:10px;margin-top:1px">💡 '+escHtml(d.meaning)+'</div>';
+        descHtml += '<div style="color:#8b6914;font-size:10px;margin-top:1px">' + 'Ref: '+escHtml(d.reference)+'</div>';
+        descHtml += '<div style="color:#808080;font-size:10px;margin-top:1px">' + escHtml(d.meaning)+'</div>';
         descHtml += '</div>';
       }
     });
     document.getElementById("eval-method-detail").innerHTML = descHtml;
   }
 }
+
+if(d.evaluation){ renderEval(d.evaluation, ""); }
 }catch(e){
 document.getElementById("status-line").innerHTML = "❌ 请求失败";
 alert("生成失败: "+e.message);
