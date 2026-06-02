@@ -16,6 +16,7 @@ from src.rich_prompt import RichPromptBuilder
 from src.gongche_vocab import parse_compact_gongche
 from src.musicxml_writer import gongche_to_musicxml
 from src.data_loader import get_dataset as _get_ds
+from src.quantitative_eval import QuantitativeEvaluator, eval_result_to_dict
 
 # ---- 全局初始化 ----
 print("Loading...")
@@ -40,6 +41,15 @@ for name, feat in FEATURES["qupai_features"].items():
 QUPAI_DATA.sort(key=lambda x: -x["count"])
 QUPAI_JSON = json.dumps(QUPAI_DATA, ensure_ascii=False)
 print(f"Ready: {len(QUPAI_DATA)} qupai")
+
+# 评估器（延迟初始化）
+_evaluator = None
+
+def get_evaluator():
+    global _evaluator
+    if _evaluator is None:
+        _evaluator = QuantitativeEvaluator(FEATURES)
+    return _evaluator
 
 
 def get_examples(qupai, n=2):
@@ -82,7 +92,31 @@ def generate(qupai, lyrics):
             "raw_response": raw,
             "musicxml_b64": mxl_b64, "saved_xml_path": saved_xml_path,
             "tokens": usage.get("total_tokens", 0),
-            "api_time": round(api_time, 2), "n_groups": len(gc_groups)}
+            "api_time": round(api_time, 2), "n_groups": len(gc_groups),
+            "gc_groups": gc_groups}
+
+
+def evaluate_generated(gc_groups, lyrics, qupai):
+    """对生成结果进行定量评估（非致命：失败不影响生成）"""
+    try:
+        ev = get_evaluator()
+        result = ev.evaluate(
+            generated_groups=gc_groups,
+            lyrics=lyrics,
+            qupai=qupai,
+        )
+        out_dir = Path("experiments/outputs")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_qp = re.sub(r'[《》\s]', '', qupai)
+        safe_ly = re.sub(r'[《》\s\n，,。！!？?；;、]', '', lyrics)[:10]
+        eval_path = out_dir / f"{safe_qp}_{safe_ly}.eval.json"
+        with open(eval_path, "w", encoding="utf-8") as f:
+            json.dump(eval_result_to_dict(result), f, ensure_ascii=False, indent=2)
+        return eval_result_to_dict(result)
+    except (ValueError, KeyError, TypeError, OSError, ImportError):
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 HTML_PAGE = r"""<!DOCTYPE html>
@@ -126,6 +160,10 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 .melody-line{padding-left:16px;margin-bottom:5px;font-size:15px;color:#5c2e0e}
 #status-line{margin-top:6px;font-size:12px;color:#8b6914}
 .loading{display:inline-block;animation:spin 1s linear infinite}@keyframes spin{100%{transform:rotate(360deg)}}
+.qupai-dropdown{position:absolute;top:100%;left:0;right:0;max-height:260px;overflow-y:auto;background:#fffaf3;border:1px solid #c4b494;border-top:none;border-radius:0 0 8px 8px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,.12)}
+.qupai-dropdown-item{padding:6px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid #eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qupai-dropdown-item:hover,.qupai-dropdown-item.active{background:#fef3e0;color:#6b3410}
+.qupai-dropdown-item .cnt{font-size:10px;color:#a08060;margin-left:6px}
 </style>
 </head>
 <body>
@@ -139,10 +177,15 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 <div>
 <div class="card">
 <h2>📝 创作参数</h2>
-<label>曲牌名 <span style="font-weight:normal;color:#a08060">（输入筛选，仅可选数据集中已有的）</span></label>
-<input type="text" id="qupai-filter" placeholder="输入拼音或汉字筛选曲牌..." autocomplete="off" oninput="filterQupai()">
-<select id="qupai" size="10" onchange="onQupaiSelect()"></select>
-<div style="font-size:11px;color:#8b6914;margin-top:2px" id="qupai-info"></div>
+<label>曲牌名 <span style="font-weight:normal;color:#a08060">（输入1-2字搜索，点击下拉选取）</span></label>
+<div style="position:relative">
+<input type="text" id="qupai-filter" placeholder="输入曲牌名搜索..." autocomplete="off" oninput="filterQupai()" onfocus="filterQupai()" onkeydown="handleQupaiKey(event)">
+<div id="qupai-dropdown" class="qupai-dropdown" style="display:none"></div>
+</div>
+<input type="hidden" id="qupai" value="">
+<div style="font-size:12px;color:#6b3410;margin-top:4px;padding:6px 10px;background:#fef9f0;border-radius:6px;border:1px solid #e0d5c0;min-height:20px" id="qupai-info">
+<span style="color:#a08060">尚未选择曲牌</span>
+</div>
 
 <label>歌词内容（自动按标点换行）</label>
 <textarea id="lyrics" placeholder="小院春寒，梨花半落胭脂雨。绿窗朱户，燕绕秋千柱。" oninput="previewLines()">小院春寒，梨花半落胭脂雨。绿窗朱户，燕绕秋千柱。心事轻梳，欲语还羞住。风起处，落红无数，谁共斜阳暮？</textarea>
@@ -166,6 +209,7 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 <div class="card" style="margin-bottom:10px"><div class="status-bar" id="result-status"></div></div>
 <div class="tab-bar">
 <div class="tab active" onclick="switchTab('gongche')">🎼 工尺谱</div>
+<div class="tab" onclick="switchTab('evaluation')">📊 定量评估</div>
 <div class="tab" onclick="switchTab('prompt')">📋 提示词</div>
 <div class="tab" onclick="switchTab('raw')">📝 模型响应</div>
 <div class="tab" onclick="switchTab('features')">📊 曲牌特征</div>
@@ -177,6 +221,44 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 <a class="download-btn" id="dl-mxl" href="#" download="generated.musicxml">📥 下载 MusicXML</a>
 <a class="download-btn alt" id="dl-txt" href="#" download="generated.txt">📥 下载工尺谱</a>
 </div>
+</div>
+<div id="tab-evaluation" class="tab-content card">
+<h2>定量评估报告</h2>
+<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+<div style="flex:1;min-width:110px;text-align:center;padding:14px;background:#fef3e0;border-radius:8px;border:2px solid #d4a574">
+<div style="font-size:28px;font-weight:bold;color:#8b4513" id="eval-overall">--</div>
+<div style="font-size:11px;color:#8b6914">综合评分</div>
+</div>
+<div style="flex:1;min-width:110px;text-align:center;padding:14px;background:#e8f5e9;border-radius:8px;border:2px solid #66bb6a">
+<div style="font-size:28px;font-weight:bold;color:#2e7d32" id="eval-style">--</div>
+<div style="font-size:11px;color:#558b2f">风格相似度</div>
+</div>
+<div style="flex:1;min-width:110px;text-align:center;padding:14px;background:#e3f2fd;border-radius:8px;border:2px solid #42a5f5">
+<div style="font-size:28px;font-weight:bold;color:#1565c0" id="eval-tone">--</div>
+<div style="font-size:11px;color:#1976d2">声调综合</div>
+<div style="font-size:9px;color:#64b5f6;margin-top:3px">
+  规则 <span id="eval-tone-rule">--</span> / 数据 <span id="eval-tone-data">--</span>
+</div>
+</div>
+</div>
+<h3 style="margin-top:12px;font-size:14px">风格相似度 — 分项指标</h3>
+<div id="eval-style-detail" style="font-size:12px;line-height:2"></div>
+<h3 style="margin-top:12px;font-size:14px">声调对齐度 — 综合评分（规则50%+数据50%）</h3>
+<div id="eval-tone-detail" style="font-size:12px;line-height:2"></div>
+<h3 style="margin-top:12px;font-size:13px">声调对齐度 — 分方法对比</h3>
+<div style="display:flex;gap:16px;flex-wrap:wrap">
+<div style="flex:1;min-width:200px;padding:8px;background:#fff8e1;border-radius:6px" id="eval-tone-rule-detail"></div>
+<div style="flex:1;min-width:200px;padding:8px;background:#e8f0fe;border-radius:6px" id="eval-tone-data-detail"></div>
+</div>
+<details style="margin-top:12px">
+<summary style="cursor:pointer;font-weight:bold;color:#6b3410">逐字声调分析 (点击展开)</summary>
+<div id="eval-char-detail" style="max-height:300px;overflow-y:auto;font-size:11px;margin-top:6px"></div>
+</details>
+<p style="font-size:10px;color:#a08060;margin-top:10px" id="eval-meta"></p>
+<details style="margin-top:12px">
+<summary style="cursor:pointer;font-weight:bold;color:#6b3410">📖 指标计算说明 (点击展开)</summary>
+<div id="eval-method-detail" style="font-size:11px;line-height:1.8;max-height:400px;overflow-y:auto;margin-top:6px;padding:8px;background:#fefef8;border-radius:6px;border:1px solid #e0d5c0"></div>
+</details>
 </div>
 <div id="tab-prompt" class="tab-content card">
 <h2>System Prompt</h2><pre id="sys-prompt"></pre>
@@ -197,43 +279,131 @@ var QDATA = __QUPAI_DATA__;
 var sel = document.getElementById("qupai");
 var filterInput = document.getElementById("qupai-filter");
 var infoDiv = document.getElementById("qupai-info");
+var dropdown = document.getElementById("qupai-dropdown");
+var dropdownIndex = -1;
 
-// Populate select
-function populateSelect(list) {
-  sel.innerHTML = "";
-  list.forEach(function(q, i){
-    var o = document.createElement("option");
-    o.value = q.name;
-    o.textContent = q.name + "  [" + q.count + "首 " + q.region + (q.mode?" "+q.mode:"") + "]";
-    if (i === 0) o.selected = true;
-    sel.appendChild(o);
-  });
-  updateInfo();
+// 当前已选曲牌
+var selectedQupai = null;
+
+function selectQupai(name) {
+  // 从 QDATA 查找完整信息
+  var found = QDATA.filter(function(q){ return q.name === name; })[0];
+  if (found) {
+    selectedQupai = found;
+    sel.value = found.name;
+    updateInfo();
+  }
+  hideDropdown();
+  filterInput.value = name || '';
+  filterInput.focus();
 }
-populateSelect(QDATA);
+
+function hideDropdown() {
+  dropdown.style.display = "none";
+  dropdown.innerHTML = "";
+  dropdownIndex = -1;
+}
 
 function filterQupai() {
   var val = filterInput.value.trim().toLowerCase();
-  if (!val) { populateSelect(QDATA); return; }
+  if (!val) {
+    // 未输入时隐藏下拉，但如果已选则保留信息
+    hideDropdown();
+    if (!selectedQupai) {
+      infoDiv.innerHTML = '<span style="color:#a08060">尚未选择曲牌</span>';
+    }
+    return;
+  }
+  // 筛选匹配项
   var filtered = QDATA.filter(function(q){
     return q.name.toLowerCase().indexOf(val) >= 0;
   });
-  populateSelect(filtered);
+  if (filtered.length === 0) {
+    hideDropdown();
+    return;
+  }
+  // 限制最多显示 30 条
+  var show = filtered.slice(0, 30);
+  var html = "";
+  show.forEach(function(q, i){
+    html += '<div class="qupai-dropdown-item' + (i===0?' active':'') + '" data-name="' + escHtml(q.name) + '">' +
+      escHtml(q.name) + '<span class="cnt">' + q.count + '首 ' + q.region + (q.mode?' '+q.mode:'') + '</span></div>';
+  });
+  dropdown.innerHTML = html;
+  dropdown.style.display = "block";
+  dropdownIndex = -1;
 }
 
-function onQupaiSelect() {
-  updateInfo();
+// 下拉项点击（事件委托）
+dropdown.addEventListener('mousedown', function(e){
+  var item = e.target.closest('.qupai-dropdown-item');
+  if (item) {
+    e.preventDefault();
+    e.stopPropagation();
+    var name = item.getAttribute('data-name');
+    if (name) selectQupai(name);
+  }
+});
+
+// 键盘导航
+function handleQupaiKey(e) {
+  var items = dropdown.querySelectorAll('.qupai-dropdown-item');
+  if (items.length === 0) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    dropdownIndex = Math.min(dropdownIndex + 1, items.length - 1);
+    updateDropdownActive(items);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    dropdownIndex = Math.max(dropdownIndex - 1, 0);
+    updateDropdownActive(items);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (dropdownIndex >= 0 && dropdownIndex < items.length) {
+      var name = items[dropdownIndex].getAttribute('data-name');
+      if (name) selectQupai(name);
+    } else if (items.length > 0) {
+      var n = items[0].getAttribute('data-name');
+      if (n) selectQupai(n);
+    }
+  } else if (e.key === 'Escape') {
+    hideDropdown();
+  }
+}
+
+function updateDropdownActive(items) {
+  items.forEach(function(item, i){
+    if (i === dropdownIndex) {
+      item.classList.add('active');
+      item.scrollIntoView({block:'nearest'});
+    } else {
+      item.classList.remove('active');
+    }
+  });
 }
 
 function updateInfo() {
-  var v = sel.value;
-  var found = QDATA.filter(function(q){ return q.name === v; })[0];
-  if (found) {
-    infoDiv.textContent = "已选: " + found.name + " — 数据集有 " + found.count + " 首参考曲目";
+  if (selectedQupai) {
+    infoDiv.innerHTML = '<b>' + escHtml(selectedQupai.name) + '</b> ' +
+      '<span style="font-size:10px;color:#8b6914">' +
+      '数据集收录 <b>' + selectedQupai.count + '</b> 首 | ' +
+      '板块: ' + escHtml(selectedQupai.region||'?') +
+      (selectedQupai.mode ? ' | 宫调: ' + escHtml(selectedQupai.mode) : '') +
+      '</span>';
   } else {
-    infoDiv.textContent = "";
+    infoDiv.innerHTML = '<span style="color:#a08060">尚未选择曲牌</span>';
   }
 }
+
+// 点击页面其他地方关闭下拉
+document.addEventListener('click', function(e){
+  if (e.target !== filterInput && e.target !== dropdown && !dropdown.contains(e.target)) {
+    hideDropdown();
+  }
+});
+
+// 默认选择数据集中曲目数量最多的曲牌
+selectQupai(QDATA[0].name);
 updateInfo();
 
 function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -308,6 +478,131 @@ var tx = document.getElementById("dl-txt");
 tx.href = "data:text/plain;charset=utf-8,"+encodeURIComponent(d.raw_response);
 tx.download = q+"_"+l.replace(/\n/g,"").slice(0,8)+".txt";
 switchTab("gongche");
+
+// ---- 渲染定量评估 ----
+if(d.evaluation){
+  var e = d.evaluation;
+  var pct = function(v){ return (v != null && v >= 0) ? (v*100).toFixed(0)+"%" : "N/A"; };
+  document.getElementById("eval-overall").textContent = pct(e.overall_score);
+  document.getElementById("eval-style").textContent = pct(e.style_overall);
+  document.getElementById("eval-tone").textContent = pct(e.tone_overall);
+  document.getElementById("eval-tone-rule").textContent = pct(e.tone_rule_overall);
+  document.getElementById("eval-tone-data").textContent = pct(e.tone_data_overall);
+  document.getElementById("eval-meta").textContent = "评估时间: " + (e.timestamp || '') + " | 曲牌: " + (e.qupai || '') + " | 歌词: " + (e.lyrics || '').slice(0,20);
+
+  // 风格指标
+  var styleNames = {"format_compliance":"格式合规","pitch_distribution":"音高分布匹配","interval_distribution":"音程分布匹配","density_match":"密度匹配","melisma_match":"拖腔匹配","boundary_match":"起收音匹配","range_match":"音域匹配"};
+  var styleHtml = "";
+  for(var k in styleNames){
+    var v = (e.style_scores && e.style_scores[k] != null) ? e.style_scores[k] : 0;
+    var p = (v*100).toFixed(0);
+    styleHtml += '<div style="margin:3px 0"><span style="display:inline-block;width:110px">'+styleNames[k]+'</span>'+
+      '<span style="display:inline-block;height:16px;background:linear-gradient(90deg,#8b4513,#d4a574);border-radius:3px;vertical-align:middle;width:'+(p*2)+'px;min-width:'+(p>0?'2px':'0')+'"></span>'+
+      '<span style="font-size:11px;margin-left:6px">'+p+'%</span></div>';
+  }
+  document.getElementById("eval-style-detail").innerHTML = styleHtml;
+
+  // 声调指标 — 综合
+  var toneNames = {"平":"平声","上":"上声","去":"去声","入":"入声"};
+  var toneHtml = "";
+  for(var k in toneNames){
+    var v = (e.tone_scores && e.tone_scores[k] != null) ? e.tone_scores[k] : null;
+    if(v !== null && v >= 0){
+      var p = (v*100).toFixed(0);
+      toneHtml += '<div style="margin:3px 0"><span style="display:inline-block;width:110px">'+toneNames[k]+'</span>'+
+        '<span style="display:inline-block;height:16px;background:linear-gradient(90deg,#1565c0,#42a5f5);border-radius:3px;vertical-align:middle;width:'+(p*2)+'px;min-width:2px"></span>'+
+        '<span style="font-size:11px;margin-left:6px">'+p+'%</span></div>';
+    } else {
+      toneHtml += '<div style="margin:3px 0"><span style="display:inline-block;width:110px">'+toneNames[k]+'</span><span style="font-size:11px;color:#888">(未出现)</span></div>';
+    }
+  }
+  document.getElementById("eval-tone-detail").innerHTML = toneHtml;
+
+  // 声调指标 — 规则判断
+  if(e.tone_rule_scores){
+    var ruleHtml = '<p style="font-size:11px;color:#8b6914;margin-bottom:4px">方法A: 传统规则判断</p>';
+    for(var k in toneNames){
+      var v = (e.tone_rule_scores && e.tone_rule_scores[k] != null) ? e.tone_rule_scores[k] : null;
+      if(v !== null && v >= 0){
+        var p = (v*100).toFixed(0);
+        ruleHtml += '<div style="margin:2px 0"><span style="display:inline-block;width:110px;font-size:12px">'+toneNames[k]+'</span>'+
+          '<span style="display:inline-block;height:12px;background:linear-gradient(90deg,#ff9800,#ffc107);border-radius:2px;vertical-align:middle;width:'+(p*2)+'px;min-width:2px"></span>'+
+          '<span style="font-size:10px;margin-left:4px">'+p+'%</span></div>';
+      }
+    }
+    ruleHtml += '<span style="font-size:10px;color:#8b6914">综合: '+pct(e.tone_rule_overall)+'</span>';
+    document.getElementById("eval-tone-rule-detail").innerHTML = ruleHtml;
+  }
+
+  // 声调指标 — 数据驱动
+  if(e.tone_data_scores){
+    var dataHtml = '<p style="font-size:11px;color:#1565c0;margin-bottom:4px">方法B: 数据集统计对比</p>';
+    for(var k in toneNames){
+      var v = (e.tone_data_scores && e.tone_data_scores[k] != null) ? e.tone_data_scores[k] : null;
+      if(v !== null && v >= 0){
+        var p = (v*100).toFixed(0);
+        dataHtml += '<div style="margin:2px 0"><span style="display:inline-block;width:110px;font-size:12px">'+toneNames[k]+'</span>'+
+          '<span style="display:inline-block;height:12px;background:linear-gradient(90deg,#1565c0,#64b5f6);border-radius:2px;vertical-align:middle;width:'+(p*2)+'px;min-width:2px"></span>'+
+          '<span style="font-size:10px;margin-left:4px">'+p+'%</span></div>';
+      }
+    }
+    dataHtml += '<span style="font-size:10px;color:#1565c0">综合: '+pct(e.tone_data_overall)+'</span>';
+    document.getElementById("eval-tone-data-detail").innerHTML = dataHtml;
+  }
+
+  // 逐字分析
+  if(e.char_details && e.char_details.length > 0){
+    var charHtml = '<table style="width:100%;border-collapse:collapse">'+
+      '<tr style="background:#fef3e0;font-size:11px"><th>字</th><th>声</th><th>音</th>'+
+      '<th>稳</th><th>↕</th><th>短</th><th>首</th><th style="color:#e65100">规则</th>'+
+      '<th style="color:#1565c0">JS</th><th style="color:#1565c0">首</th><th style="color:#1565c0">拖</th><th style="color:#1565c0">时</th>'+
+      '<th style="color:#1565c0">数据</th><th>综合</th></tr>';
+    for(var i=0;i<e.char_details.length;i++){
+      var c = e.char_details[i];
+      var arrow = (c.rule_contour||0) > 0.1 ? "↗" : (c.rule_contour||0) < -0.1 ? "↘" : "→";
+      charHtml += '<tr style="border-bottom:1px solid #eee;font-size:10px">'+
+        '<td style="font-weight:bold">'+escHtml(c.char)+'</td>'+
+        '<td>'+c.tone+'</td>'+
+        '<td>'+c.note_count+'</td>'+
+        '<td>'+(c.rule_stability!=null?(c.rule_stability*100).toFixed(0)+"%":"-")+'</td>'+
+        '<td>'+arrow+'</td>'+
+        '<td>'+(c.rule_brevity!=null?(c.rule_brevity*100).toFixed(0)+"%":"-")+'</td>'+
+        '<td>'+(c.rule_first_pitch!=null?(c.rule_first_pitch*100).toFixed(0)+"%":"-")+'</td>'+
+        '<td style="color:#e65100;font-weight:bold">'+(c.rule_score!=null&&c.rule_score>=0?(c.rule_score*100).toFixed(0)+"%":"-")+'</td>'+
+        '<td>'+(c.data_pitch_js!=null?(c.data_pitch_js*100).toFixed(0)+"%":"-")+'</td>'+
+        '<td>'+(c.data_first_pitch!=null?(c.data_first_pitch*100).toFixed(0)+"%":"-")+'</td>'+
+        '<td>'+(c.data_melisma!=null?(c.data_melisma*100).toFixed(0)+"%":"-")+'</td>'+
+        '<td>'+(c.data_duration!=null?(c.data_duration*100).toFixed(0)+"%":"-")+'</td>'+
+        '<td style="color:#1565c0;font-weight:bold">'+(c.data_score!=null&&c.data_score>=0?(c.data_score*100).toFixed(0)+"%":"-")+'</td>'+
+        '<td style="font-weight:bold;color:#6b3410">'+(c.score!=null&&c.score>=0?(c.score*100).toFixed(0)+"%":"-")+'</td></tr>';
+    }
+    charHtml += '</table>';
+    document.getElementById("eval-char-detail").innerHTML = charHtml;
+  } else {
+    document.getElementById("eval-char-detail").innerHTML = '<span style="color:#888">暂无逐字分析数据</span>';
+  }
+
+  // 渲染指标计算说明
+  if(e.metric_descriptions){
+    var descHtml = '';
+    // Style composite indicators
+    var styleKeys = ['format_compliance','pitch_distribution','interval_distribution','density_match','melisma_match','boundary_match','range_match','style_overall'];
+    var toneKeys = ['tone_rule_scores','tone_data_scores','tone_overall'];
+    var allKeys = styleKeys.concat(toneKeys).concat(['overall_score']);
+    allKeys.forEach(function(k){
+      var d = e.metric_descriptions[k];
+      if(d){
+        descHtml += '<div style="margin:6px 0;padding:6px 8px;border-left:3px solid #d4a574;background:#fefdf8">';
+        descHtml += '<b style="color:#6b3410">'+escHtml(d.label)+'</b>';
+        descHtml += '<div style="color:#5c3a1e;margin-top:1px">'+escHtml(d.method)+'</div>';
+        descHtml += '<div style="color:#8b6914;font-size:10px;margin-top:1px">📂 参考: '+escHtml(d.reference)+'</div>';
+        descHtml += '<div style="color:#808080;font-size:10px;margin-top:1px">💡 '+escHtml(d.meaning)+'</div>';
+        descHtml += '</div>';
+      }
+    });
+    document.getElementById("eval-method-detail").innerHTML = descHtml;
+  }
+}
 }catch(e){
 document.getElementById("status-line").innerHTML = "❌ 请求失败";
 alert("生成失败: "+e.message);
@@ -318,7 +613,7 @@ b.textContent = "🎵 生成音乐";
 
 function switchTab(n){
 var tabs = document.querySelectorAll(".tab");
-var names = ["gongche","prompt","raw","features"];
+var names = ["gongche","evaluation","prompt","raw","features"];
 tabs.forEach(function(t,i){t.classList.toggle("active",names[i]===n)});
 document.querySelectorAll(".tab-content").forEach(function(t){t.classList.remove("active")});
 document.getElementById("tab-"+n).classList.add("active");
@@ -398,6 +693,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": f"生成失败: {str(e)}"}, 500)
                 return
 
+            # 定量评估
+            eval_data = None
+            if result["gc_groups"]:
+                eval_data = evaluate_generated(
+                    result["gc_groups"], lyrics, qupai
+                )
+
             qf = FEATURES["qupai_features"].get(qupai, {})
             self._send_json({
                 "system_prompt": result["system_prompt"],
@@ -418,6 +720,7 @@ class Handler(BaseHTTPRequestHandler):
                     "region_distribution": qf.get("region_distribution", {}),
                     "mode_distribution": qf.get("mode_distribution", {}),
                 },
+                "evaluation": eval_data,
             })
         else:
             self.send_response(404)
