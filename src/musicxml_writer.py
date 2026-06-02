@@ -1,5 +1,6 @@
 """
-工尺谱 → MusicXML 转换模块。
+工尺谱 → MusicXML 转    is_rest: bool = False   # 句间休止符
+换模块。
 
 将生成的工尺谱旋律序列转换为标准 MusicXML 3.1 格式文件，
 可直接用 MuseScore 等软件打开、编辑和播放。
@@ -73,6 +74,7 @@ def gongche_to_musicxml(
     work_title: str = "",
     qupai: str = "",
     source: str = "",
+    line_indices: Optional[List[int]] = None,
 ) -> str:
     """
     将工尺谱旋律序列写入 MusicXML 文件。
@@ -84,10 +86,29 @@ def gongche_to_musicxml(
         work_title: 作品标题
         qupai: 曲牌名
         source: 来源
+        line_indices: 句末字索引列表，在这些位置后插入休止符（如 [5,12,20]）
 
     Returns:
         生成的 MusicXML 文件路径
     """
+    # ---- 在句间插入休止符 ----
+    if line_indices and len(line_indices) > 0:
+        groups_with_rests = []
+        rest_set = set(line_indices)
+        for i, g in enumerate(lyric_groups):
+            groups_with_rests.append(g)
+            if i in rest_set:
+                # 插入休止符：2 拍（一个小节的时值）
+                rest_note = NoteEvent(
+                    lyric="", lyric_modern_tone=0, lyric_is_entering=False,
+                    lyric_guangyun_tone="", gongche="", gongche_pitch=0.0,
+                    duration=0.5, beat_id=-1, line_id=-1, lyric_id=-1,
+                    is_melisma=False, melisma_id=0, rhythm="",
+                )
+                rest_group = LyricNoteGroup(lyric="", lyric_modern_tone=0, lyric_is_entering=False, lyric_guangyun_tone="", notes=[rest_note])
+                groups_with_rests.append(rest_group)
+        lyric_groups = groups_with_rests
+
     # ---- 计算每小节的音符分组 ----
     measures = _partition_into_measures(lyric_groups)
 
@@ -152,8 +173,9 @@ class _MeasureEvent:
     is_melisma_end: bool    # 拖腔结束
     is_tie_start: bool      # 同音拖腔 — 用 tie 不用 slur
     is_tie_stop: bool
-    beam: Optional[str]     # "begin", "continue", "end", None
-    stem: str               # "up", "down", None
+    beam: Optional[str] = None  # "begin", "continue", "end", None
+    stem: str = "up"            # "up", "down"
+    is_rest: bool = False       # 句间休止符
 
 
 def _csv_to_xml_duration(csv_duration: float) -> Tuple[int, str, bool]:
@@ -183,7 +205,7 @@ def _csv_to_xml_duration(csv_duration: float) -> Tuple[int, str, bool]:
 
 
 def _partition_into_measures(
-    lyric_groups: List[LyricNoteGroup]
+    lyric_groups: List[LyricNoteGroup],
 ) -> List[List[_MeasureEvent]]:
     """
     将旋律序列划分为小节（每小节 2/4 = 2 quarters = 20160 divisions）。
@@ -208,6 +230,18 @@ def _partition_into_measures(
         for i, note in enumerate(notes):
             xml_dur, mtype, is_dotted = _csv_to_xml_duration(note.duration)
 
+            # 休止符（句间停顿）
+            if not note.gongche or note.gongche not in GONGCHE_TO_PITCH:
+                all_events.append(_MeasureEvent(
+                    lyric="", step="C", octave=4, xml_duration=xml_dur,
+                    musicxml_type=mtype, is_dotted=False, is_rest=True,
+                    has_lyric=False, is_melisma_start=False,
+                    is_melisma_continue=False, is_melisma_end=False,
+                    is_tie_start=False, is_tie_stop=False,
+                    beam=None, stem="up",
+                ))
+                continue
+
             is_first = (i == 0)
             is_last = (i == len(notes) - 1)
 
@@ -227,6 +261,7 @@ def _partition_into_measures(
                 xml_duration=xml_dur,
                 musicxml_type=mtype,
                 is_dotted=is_dotted,
+                is_rest=False,
                 has_lyric=is_first,
                 is_melisma_start=is_melisma and is_first,
                 is_melisma_continue=is_melisma and not is_first and not is_last,
@@ -266,11 +301,12 @@ def _partition_into_measures(
                     xml_duration=remaining,
                     musicxml_type=_duration_to_type(remaining),
                     is_dotted=False,
+                    is_rest=ev.is_rest,
                     has_lyric=ev.has_lyric,
                     is_melisma_start=ev.is_melisma_start,
                     is_melisma_continue=False,
                     is_melisma_end=False,
-                    is_tie_start=True,
+                    is_tie_start=not ev.is_rest and True,
                     is_tie_stop=False,
                     beam=ev.beam,
                     stem=ev.stem,
@@ -290,12 +326,13 @@ def _partition_into_measures(
                 xml_duration=ev.xml_duration - remaining,
                 musicxml_type=_duration_to_type(ev.xml_duration - remaining),
                 is_dotted=False,
+                is_rest=ev.is_rest,
                 has_lyric=False,
                 is_melisma_start=False,
-                is_melisma_continue=True,
+                is_melisma_continue=not ev.is_rest and True,
                 is_melisma_end=ev.is_melisma_end,
                 is_tie_start=False,
-                is_tie_stop=True,
+                is_tie_stop=not ev.is_rest and True,
                 beam=ev.beam,
                 stem=ev.stem,
             )
@@ -380,10 +417,14 @@ def _write_measure_notes(measure: etree.Element,
     for ev in events:
         note_el = _sub_element(measure, "note")
 
-        # 音高
-        pitch_el = _sub_element(note_el, "pitch")
-        _sub_element(pitch_el, "step", ev.step)
-        _sub_element(pitch_el, "octave", str(ev.octave))
+        if ev.is_rest:
+            # 休止符：不写 pitch，写 rest 元素
+            _sub_element(note_el, "rest")
+        else:
+            # 音高
+            pitch_el = _sub_element(note_el, "pitch")
+            _sub_element(pitch_el, "step", ev.step)
+            _sub_element(pitch_el, "octave", str(ev.octave))
 
         # 时长
         _sub_element(note_el, "duration", str(ev.xml_duration))
@@ -392,43 +433,44 @@ def _write_measure_notes(measure: etree.Element,
         if ev.is_dotted:
             _sub_element(note_el, "dot")
 
-        # Tie (跨小节连线)
-        if ev.is_tie_start:
-            _sub_element(note_el, "tie", attrib={"type": "start"})
-        if ev.is_tie_stop:
-            _sub_element(note_el, "tie", attrib={"type": "stop"})
+        if not ev.is_rest:
+            # Tie (跨小节连线)
+            if ev.is_tie_start:
+                _sub_element(note_el, "tie", attrib={"type": "start"})
+            if ev.is_tie_stop:
+                _sub_element(note_el, "tie", attrib={"type": "stop"})
 
-        # Notations
-        notations = _sub_element(note_el, "notations")
+            # Notations
+            notations = _sub_element(note_el, "notations")
 
-        if ev.is_tie_start:
-            _sub_element(notations, "tied", attrib={"type": "start"})
-        if ev.is_tie_stop:
-            _sub_element(notations, "tied", attrib={"type": "stop"})
+            if ev.is_tie_start:
+                _sub_element(notations, "tied", attrib={"type": "start"})
+            if ev.is_tie_stop:
+                _sub_element(notations, "tied", attrib={"type": "stop"})
 
-        # Slur (拖腔连线) — 用 slur_counter 确保跨小节 number 一致
-        if ev.is_melisma_start:
-            slur_counter[0] += 1
-            _sub_element(notations, "slur",
-                         attrib={"number": str(slur_counter[0]), "type": "start"})
-        if ev.is_melisma_end:
-            _sub_element(notations, "slur",
-                         attrib={"number": str(slur_counter[0]), "type": "stop"})
+            # Slur (拖腔连线) — 用 slur_counter 确保跨小节 number 一致
+            if ev.is_melisma_start:
+                slur_counter[0] += 1
+                _sub_element(notations, "slur",
+                             attrib={"number": str(slur_counter[0]), "type": "start"})
+            if ev.is_melisma_end:
+                _sub_element(notations, "slur",
+                             attrib={"number": str(slur_counter[0]), "type": "stop"})
 
-        # 歌词
-        if ev.has_lyric and ev.lyric:
-            lyric_el = _sub_element(note_el, "lyric",
-                                     attrib={"name": "1", "number": "1"})
-            _sub_element(lyric_el, "syllabic", "single")
-            _sub_element(lyric_el, "text", ev.lyric)
+            # 歌词
+            if ev.has_lyric and ev.lyric:
+                lyric_el = _sub_element(note_el, "lyric",
+                                         attrib={"name": "1", "number": "1"})
+                _sub_element(lyric_el, "syllabic", "single")
+                _sub_element(lyric_el, "text", ev.lyric)
 
-        # Stem
-        if ev.musicxml_type in ("eighth", "16th"):
-            _sub_element(note_el, "stem", ev.stem)
+            # Stem
+            if ev.musicxml_type in ("eighth", "16th"):
+                _sub_element(note_el, "stem", ev.stem)
 
-        # Beam
-        if ev.beam:
-            _sub_element(note_el, "beam", attrib={"number": "1"}, text=ev.beam)
+            # Beam
+            if ev.beam:
+                _sub_element(note_el, "beam", attrib={"number": "1"}, text=ev.beam)
 
     # 终小节线
     if is_last_measure:

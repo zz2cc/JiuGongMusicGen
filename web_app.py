@@ -53,6 +53,30 @@ def get_evaluator():
     return _evaluator
 
 
+def _compute_line_indices(lyrics: str) -> list:
+    """计算歌词行边界索引（每个行末字在整段去标点文本中的位置）。
+
+    返回: [行1末字索引, 行2末字索引, ...] 不包含最后一行的末字。
+    """
+    clean = re.sub(r'[，,。！!？?；;、\s\n\r\t]', '', lyrics)
+    if not clean:
+        return []
+    # 按标点/换行拆分原始歌词，计算每行的字符位置
+    lines_raw = re.split(r'[，,。！!？?；;、\n\r]+', lyrics.strip())
+    lines_raw = [ln.strip() for ln in lines_raw if ln.strip()]
+    if len(lines_raw) <= 1:
+        return []
+    indices = []
+    pos = 0
+    for i, line in enumerate(lines_raw):
+        # 计算该行在 clean 字符串中的字符数
+        line_clean = re.sub(r'[，,。！!？?；;、\s\n\r\t]', '', line)
+        pos += len(line_clean)
+        if i < len(lines_raw) - 1:
+            indices.append(pos - 1)  # 行末字的索引
+    return indices
+
+
 def get_examples(qupai, n=2):
     songs = _ds.get_songs_by_qupai(qupai)
     return [{"polyu_id": s.polyu_id, "lyrics": s.lyrics_text,
@@ -81,9 +105,12 @@ def generate(qupai, lyrics):
         safe_qp = re.sub(r'[《》\s]', '', qupai)
         safe_ly = re.sub(r'[《》\s\n，,。！!？?；;、]', '', lyrics)[:10]
         saved_xml_path = str(out_dir / f"{safe_qp}_{safe_ly}.musicxml")
+        # 计算句间休止位置
+        line_indices = _compute_line_indices(lyrics)
         try:
             gongche_to_musicxml(lyric_groups=gc_groups, output_path=saved_xml_path,
-                                title=f"AI: {qupai}", work_title=f"JiuGong: {qupai}", qupai=qupai)
+                                title=f"AI: {qupai}", work_title=f"JiuGong: {qupai}", qupai=qupai,
+                                line_indices=line_indices)
             with open(saved_xml_path, "rb") as f:
                 mxl_b64 = base64.b64encode(f.read()).decode()
         except Exception:
@@ -117,9 +144,11 @@ def generate_bare(qupai, lyrics):
         safe_qp = re.sub(r'[《》\s]', '', qupai)
         safe_ly = re.sub(r'[《》\s\n，,。！!？?；;、]', '', lyrics)[:10]
         saved_xml_path = str(out_dir / f"bare_{safe_qp}_{safe_ly}.musicxml")
+        line_indices = _compute_line_indices(lyrics)
         try:
             gongche_to_musicxml(lyric_groups=gc_groups, output_path=saved_xml_path,
-                                title=f"Bare: {qupai}", work_title=f"JiuGong-Bare: {qupai}", qupai=qupai)
+                                title=f"Bare: {qupai}", work_title=f"JiuGong-Bare: {qupai}", qupai=qupai,
+                                line_indices=line_indices)
             with open(saved_xml_path, "rb") as f:
                 mxl_b64 = base64.b64encode(f.read()).decode()
         except Exception:
@@ -379,26 +408,12 @@ function hideDropdown() {
   dropdownIndex = -1;
 }
 
-function filterQupai() {
-  var val = filterInput.value.trim().toLowerCase();
-  if (!val) {
-    // 未输入时隐藏下拉，但如果已选则保留信息
-    hideDropdown();
-    if (!selectedQupai) {
-      infoDiv.innerHTML = '<span style="color:#a08060">尚未选择曲牌</span>';
-    }
-    return;
-  }
-  // 筛选匹配项
-  var filtered = QDATA.filter(function(q){
-    return q.name.toLowerCase().indexOf(val) >= 0;
-  });
-  if (filtered.length === 0) {
+function renderQupaiDropdown(items) {
+  if (items.length === 0) {
     hideDropdown();
     return;
   }
-  // 限制最多显示 30 条
-  var show = filtered.slice(0, 30);
+  var show = items.slice(0, 30);
   var html = "";
   show.forEach(function(q, i){
     html += '<div class="qupai-dropdown-item' + (i===0?' active':'') + '" data-name="' + escHtml(q.name) + '">' +
@@ -407,6 +422,20 @@ function filterQupai() {
   dropdown.innerHTML = html;
   dropdown.style.display = "block";
   dropdownIndex = -1;
+}
+
+function filterQupai() {
+  var val = filterInput.value.trim().toLowerCase();
+  if (!val) {
+    // 未输入时展示热门曲牌，方便直接点选
+    renderQupaiDropdown(QDATA);
+    return;
+  }
+  // 筛选匹配项
+  var filtered = QDATA.filter(function(q){
+    return q.name.toLowerCase().indexOf(val) >= 0;
+  });
+  renderQupaiDropdown(filtered);
 }
 
 // 下拉项点击（事件委托）
@@ -511,18 +540,18 @@ var lines = splitLyrics(rawText);
 var l = lines.join("\n");
 if(!q||!l){alert("请填写歌词");return}
 
+var isCompare = document.getElementById("compare-mode").checked;
 var b = document.getElementById("gen-btn");
 b.disabled = true;
 b.textContent = isCompare ? "生成中(对比)..." : "生成中...";
 document.getElementById("status-line").innerHTML = "<span class='loading'>⏳ 正在生成...</span>";
 
 try{
+var reqBody = {qupai:q, lyrics:l};
+if (isCompare) reqBody.compare = true;
 var r = await fetch("/api/generate",{
   method:"POST",
   headers:{"Content-Type":"application/json"},
-  var isCompare = document.getElementById("compare-mode").checked;
-  var reqBody = {qupai:q, lyrics:l};
-  if (isCompare) reqBody.compare = true;
   body:JSON.stringify(reqBody)
 });
 
