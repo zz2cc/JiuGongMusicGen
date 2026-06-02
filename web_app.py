@@ -13,6 +13,7 @@ load_dotenv(Path(__file__).parent / ".env")
 from src.config import DeepSeekConfig
 from src.deepseek_client import DeepSeekClient
 from src.rich_prompt import RichPromptBuilder
+from src.prompt_templates import BARE_SYSTEM_PROMPT, build_bare_task
 from src.gongche_vocab import parse_compact_gongche
 from src.musicxml_writer import gongche_to_musicxml
 from src.data_loader import get_dataset as _get_ds
@@ -83,6 +84,42 @@ def generate(qupai, lyrics):
         try:
             gongche_to_musicxml(lyric_groups=gc_groups, output_path=saved_xml_path,
                                 title=f"AI: {qupai}", work_title=f"JiuGong: {qupai}", qupai=qupai)
+            with open(saved_xml_path, "rb") as f:
+                mxl_b64 = base64.b64encode(f.read()).decode()
+        except Exception:
+            saved_xml_path = ""
+
+    return {"system_prompt": system_prompt, "user_prompt": user_prompt,
+            "raw_response": raw,
+            "musicxml_b64": mxl_b64, "saved_xml_path": saved_xml_path,
+            "tokens": usage.get("total_tokens", 0),
+            "api_time": round(api_time, 2), "n_groups": len(gc_groups),
+            "gc_groups": gc_groups}
+
+def generate_bare(qupai, lyrics):
+    """极简提示词生成（无曲牌特征/声调规则/样例/风格指导）"""
+    system_prompt = BARE_SYSTEM_PROMPT
+    user_prompt = build_bare_task(qupai, lyrics)
+
+    client_config = DeepSeekConfig(api_key=os.getenv("DEEPSEEK_API_KEY", ""))
+    client = DeepSeekClient(client_config)
+    t0 = time.time()
+    raw, usage = client.chat(system_prompt, user_prompt, max_tokens=800)
+    api_time = time.time() - t0
+
+    gc_groups = parse_compact_gongche(raw)
+
+    mxl_b64 = ""
+    saved_xml_path = ""
+    if gc_groups:
+        out_dir = Path("experiments/outputs")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_qp = re.sub(r'[《》\s]', '', qupai)
+        safe_ly = re.sub(r'[《》\s\n，,。！!？?；;、]', '', lyrics)[:10]
+        saved_xml_path = str(out_dir / f"bare_{safe_qp}_{safe_ly}.musicxml")
+        try:
+            gongche_to_musicxml(lyric_groups=gc_groups, output_path=saved_xml_path,
+                                title=f"Bare: {qupai}", work_title=f"JiuGong-Bare: {qupai}", qupai=qupai)
             with open(saved_xml_path, "rb") as f:
                 mxl_b64 = base64.b64encode(f.read()).decode()
         except Exception:
@@ -191,6 +228,12 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 <textarea id="lyrics" placeholder="小院春寒，梨花半落胭脂雨。绿窗朱户，燕绕秋千柱。" oninput="previewLines()">小院春寒，梨花半落胭脂雨。绿窗朱户，燕绕秋千柱。心事轻梳，欲语还羞住。风起处，落红无数，谁共斜阳暮？</textarea>
 <div class="preview-lines" id="line-preview"></div>
 
+<div style="margin-top:8px;font-size:12px;display:flex;align-items:center;gap:6px">
+<input type="checkbox" id="compare-mode" style="width:auto;cursor:pointer">
+<label for="compare-mode" style="display:inline;margin:0;cursor:pointer;font-weight:normal">
+对比模式（Bare无提示词 + Rich提示词工程，双路生成后并排对比）
+</label>
+</div>
 <button class="btn" id="gen-btn" onclick="doGenerate()">🎵 生成音乐</button>
 <div id="status-line"></div>
 </div>
@@ -271,6 +314,38 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 <h2>曲牌特征数据</h2><pre id="feat-data"></pre>
 </div>
 </div>
+</div>
+</div>
+
+<div id="compare-result-area" style="display:none">
+<div class="card" style="margin-bottom:10px"><div class="status-bar" id="compare-status"></div></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+<div class="card" style="border:2px solid #ff9800">
+<h2>Bare - 极简提示词</h2>
+<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+<div style="text-align:center;padding:8px;background:#fff8e1;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#e65100" id="bare-overall">--</div><div style="font-size:10px;color:#8b6914">综合</div></div>
+<div style="text-align:center;padding:8px;background:#f1f8e9;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#33691e" id="bare-style">--</div><div style="font-size:10px;color:#558b2f">风格</div></div>
+<div style="text-align:center;padding:8px;background:#e3f2fd;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#0d47a1" id="bare-tone">--</div><div style="font-size:10px;color:#1976d2">声调</div></div>
+</div>
+<div class="gongche-display" style="max-height:300px;font-size:14px" id="bare-gongche"></div>
+<div style="font-size:10px;color:#888;margin-top:4px" id="bare-meta"></div>
+<a class="download-btn" id="dl-bare-mxl" href="#" download="bare.musicxml" style="margin-top:6px">Download MusicXML (Bare)</a>
+</div>
+<div class="card" style="border:2px solid #2e7d32">
+<h2>Rich - 提示词工程</h2>
+<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+<div style="text-align:center;padding:8px;background:#fef3e0;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#8b4513" id="rich-overall">--</div><div style="font-size:10px;color:#8b6914">综合</div></div>
+<div style="text-align:center;padding:8px;background:#e8f5e9;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#2e7d32" id="rich-style">--</div><div style="font-size:10px;color:#558b2f">风格</div></div>
+<div style="text-align:center;padding:8px;background:#e3f2fd;border-radius:6px;flex:1"><div style="font-size:22px;font-weight:bold;color:#1565c0" id="rich-tone">--</div><div style="font-size:10px;color:#1976d2">声调</div></div>
+</div>
+<div class="gongche-display" style="max-height:300px;font-size:14px" id="rich-gongche"></div>
+<div style="font-size:10px;color:#888;margin-top:4px" id="rich-meta"></div>
+<a class="download-btn" id="dl-rich-mxl" href="#" download="rich.musicxml" style="margin-top:6px">Download MusicXML (Rich)</a>
+</div>
+</div>
+<div class="card" style="margin-top:12px">
+<h2>提示词工程提升效果</h2>
+<div id="compare-delta-table"></div>
 </div>
 </div>
 
@@ -438,14 +513,17 @@ if(!q||!l){alert("请填写歌词");return}
 
 var b = document.getElementById("gen-btn");
 b.disabled = true;
-b.textContent = "生成中...";
+b.textContent = isCompare ? "生成中(对比)..." : "生成中...";
 document.getElementById("status-line").innerHTML = "<span class='loading'>⏳ 正在生成...</span>";
 
 try{
 var r = await fetch("/api/generate",{
   method:"POST",
   headers:{"Content-Type":"application/json"},
-  body:JSON.stringify({qupai:q, lyrics:l})
+  var isCompare = document.getElementById("compare-mode").checked;
+  var reqBody = {qupai:q, lyrics:l};
+  if (isCompare) reqBody.compare = true;
+  body:JSON.stringify(reqBody)
 });
 
 if(!r.ok){alert("HTTP "+r.status+": 服务异常，请稍后重试");b.disabled=false;b.textContent="🎵 生成音乐";return}
@@ -454,7 +532,73 @@ var d = await r.json();
 if(d.error){alert(d.error);b.disabled=false;b.textContent="🎵 生成音乐";return}
 
 lastResult = d;
-document.getElementById("status-line").innerHTML = "✅ 完成 · "+d.tokens+" tokens · "+d.api_time+"s · "+d.n_groups+" 字音组";
+if (d.mode === "compare") {
+  document.getElementById("compare-result-area").style.display = "block";
+  document.getElementById("result-area").style.display = "none";
+  var pctC = function(v){ return (v != null && v >= 0) ? (v*100).toFixed(0)+"%" : "N/A"; };
+  var dStr = function(v){ if (v==null) return "N/A"; var s=v>=0?"+":""; return s+(v*100).toFixed(0)+"%"; };
+  document.getElementById("status-line").innerHTML = "Done | Bare:"+d.bare.tokens+"t "+d.bare.api_time+"s | Rich:"+d.rich.tokens+"t "+d.rich.api_time+"s";
+  document.getElementById("compare-status").innerHTML = "<span>Bare:"+d.bare.tokens+"t "+d.bare.api_time+"s</span><span>Rich:"+d.rich.tokens+"t "+d.rich.api_time+"s</span>";
+  var be = d.bare.evaluation;
+  if (be) {
+    document.getElementById("bare-overall").textContent = pctC(be.overall_score);
+    document.getElementById("bare-style").textContent = pctC(be.style_overall);
+    document.getElementById("bare-tone").textContent = pctC(be.tone_overall);
+    document.getElementById("bare-meta").textContent = "Token:"+d.bare.tokens+" | "+d.bare.api_time+"s | "+d.bare.n_groups+" groups";
+  }
+  document.getElementById("bare-gongche").innerHTML = "<pre style=\"background:transparent;color:#5c2e0e;font-size:14px;line-height:2;letter-spacing:2px;max-height:300px;white-space:pre-wrap;padding:0;margin:0;\">" + escHtml(d.bare.raw_response||"") + "</pre>";
+  if (d.bare.musicxml_b64) {
+    var bm = document.getElementById("dl-bare-mxl");
+    bm.href = "data:application/vnd.recordare.musicxml+xml;base64,"+d.bare.musicxml_b64;
+    bm.download = "bare_"+q+"_"+l.replace(/\n/g,"").slice(0,8)+".musicxml";
+  }
+  var re = d.rich.evaluation;
+  if (re) {
+    document.getElementById("rich-overall").textContent = pctC(re.overall_score);
+    document.getElementById("rich-style").textContent = pctC(re.style_overall);
+    document.getElementById("rich-tone").textContent = pctC(re.tone_overall);
+    document.getElementById("rich-meta").textContent = "Token:"+d.rich.tokens+" | "+d.rich.api_time+"s | "+d.rich.n_groups+" groups";
+  }
+  document.getElementById("rich-gongche").innerHTML = "<pre style=\"background:transparent;color:#5c2e0e;font-size:14px;line-height:2;letter-spacing:2px;max-height:300px;white-space:pre-wrap;padding:0;margin:0;\">" + escHtml(d.rich.raw_response||"") + "</pre>";
+  if (d.rich.musicxml_b64) {
+    var rm = document.getElementById("dl-rich-mxl");
+    rm.href = "data:application/vnd.recordare.musicxml+xml;base64,"+d.rich.musicxml_b64;
+    rm.download = "rich_"+q+"_"+l.replace(/\n/g,"").slice(0,8)+".musicxml";
+  }
+  if (d.comparison) {
+    var cmp = d.comparison;
+    var sn = {"format_compliance":"格式合规","pitch_distribution":"音高分布","interval_distribution":"音程分布","density_match":"密度","melisma_match":"拖腔","boundary_match":"起收音","range_match":"音域"};
+    var tn = {"平":"平声","上":"上声","去":"去声","入":"入声"};
+    var stl = "<table style=\"width:100%;border-collapse:collapse;font-size:12px\"><tr style=\"background:#fef3e0\"><th>指标</th><th>Bare</th><th>Rich</th><th>提升</th></tr>";
+    var bSS = be ? be.style_scores : {};
+    var rSS = re ? re.style_scores : {};
+    for (var sk in sn) {
+      var bv = bSS[sk]||0; var rv = rSS[sk]||0; var dv = cmp.style_delta ? (cmp.style_delta[sk]||0) : (rv-bv);
+      stl += "<tr style=\"border-bottom:1px solid #eee\"><td>"+sn[sk]+"</td><td>"+pctC(bv)+"</td><td>"+pctC(rv)+"</td><td style=\"color:"+(dv>=0?"#2e7d32":"#c62828")+";font-weight:bold\">"+(dv>=0?"+ ":"v ")+dStr(dv)+"</td></tr>";
+    }
+    var bTS = be ? be.tone_scores : {};
+    var rTS = re ? re.tone_scores : {};
+    for (var tk in tn) {
+      var btv = (bTS[tk] != null && bTS[tk] >= 0) ? bTS[tk] : 0;
+      var rtv = (rTS[tk] != null && rTS[tk] >= 0) ? rTS[tk] : 0;
+      var dtv = cmp.tone_delta ? (cmp.tone_delta[tk]||0) : (rtv-btv);
+      stl += "<tr style=\"border-bottom:1px solid #eee\"><td>声调-"+tn[tk]+"</td><td>"+pctC(btv)+"</td><td>"+pctC(rtv)+"</td><td style=\"color:"+(dtv>=0?"#2e7d32":"#c62828")+";font-weight:bold\">"+(dtv>=0?"+ ":"v ")+dStr(dtv)+"</td></tr>";
+    }
+    var bSt = be ? be.style_overall : 0; var bTo = be ? be.tone_overall : 0; var bOv = be ? be.overall_score : 0;
+    var rSt = re ? re.style_overall : 0; var rTo = re ? re.tone_overall : 0; var rOv = re ? re.overall_score : 0;
+    stl += "<tr style=\"border-top:2px solid #d4a574;font-weight:bold;background:#fef9f0\"><td>风格综合</td><td>"+pctC(bSt)+"</td><td>"+pctC(rSt)+"</td><td style=\"color:"+(cmp.style_overall_delta>=0?"#2e7d32":"#c62828")+"\">"+(cmp.style_overall_delta>=0?"+ ":"v ")+dStr(cmp.style_overall_delta)+"</td></tr>";
+    stl += "<tr style=\"font-weight:bold;background:#fef9f0\"><td>声调综合</td><td>"+pctC(bTo)+"</td><td>"+pctC(rTo)+"</td><td style=\"color:"+(cmp.tone_overall_delta>=0?"#2e7d32":"#c62828")+"\">"+(cmp.tone_overall_delta>=0?"+ ":"v ")+dStr(cmp.tone_overall_delta)+"</td></tr>";
+    stl += "<tr style=\"font-weight:bold;background:#fef3e0;font-size:14px\"><td>综合评分</td><td>"+pctC(bOv)+"</td><td>"+pctC(rOv)+"</td><td style=\"color:"+(cmp.overall_delta>=0?"#2e7d32":"#c62828")+"\">"+(cmp.overall_delta>=0?"+ ":"v ")+dStr(cmp.overall_delta)+"</td></tr>";
+    stl += "</table>";
+    document.getElementById("compare-delta-table").innerHTML = stl;
+  }
+  b.disabled = false;
+  b.textContent = "Generate Music";
+  return;
+}
+document.getElementById("compare-result-area").style.display = "none";
+document.getElementById("result-area").style.display = "block";
+document.getElementById("status-line").innerHTML = "Complete - "+d.tokens+" tokens - "+d.api_time+"s - "+d.n_groups+" groups";
 document.getElementById("result-status").innerHTML =
   "<span>🟢 "+d.tokens+" tokens</span><span>⏱ "+d.api_time+"s</span><span>📐 "+d.n_groups+" 字音组</span><span>🎵 MusicXML已生成</span>" +
   (d.saved_xml_path ? "<br><span style=\"font-size:11px\">📁 已保存: "+escHtml(d.saved_xml_path)+"</span>" : "");
@@ -688,20 +832,91 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             try:
-                result = generate(qupai, lyrics)
+                compare_mode = data.get("compare", False)
+                if compare_mode:
+                    bare_result = generate_bare(qupai, lyrics)
+                    rich_result = generate(qupai, lyrics)
+
+                    bare_eval = None
+                    rich_eval = None
+                    if bare_result["gc_groups"]:
+                        bare_eval = evaluate_generated(bare_result["gc_groups"], lyrics, qupai)
+                    if rich_result["gc_groups"]:
+                        rich_eval = evaluate_generated(rich_result["gc_groups"], lyrics, qupai)
+
+                    comparison = None
+                    if bare_eval and rich_eval:
+                        comparison = {
+                            "style_delta": {
+                                k: round(rich_eval["style_scores"].get(k, 0) - bare_eval["style_scores"].get(k, 0), 4)
+                                for k in bare_eval["style_scores"]
+                            },
+                            "tone_delta": {
+                                k: round(
+                                    (rich_eval["tone_scores"].get(k, 0) if rich_eval["tone_scores"].get(k, -1) >= 0 else 0)
+                                    - (bare_eval["tone_scores"].get(k, 0) if bare_eval["tone_scores"].get(k, -1) >= 0 else 0),
+                                    4
+                                )
+                                for k in ["平", "上", "去", "入"]
+                            },
+                            "style_overall_delta": round(rich_eval["style_overall"] - bare_eval["style_overall"], 4),
+                            "tone_overall_delta": round(rich_eval["tone_overall"] - bare_eval["tone_overall"], 4),
+                            "overall_delta": round(rich_eval["overall_score"] - bare_eval["overall_score"], 4),
+                        }
+
+                    qf = FEATURES["qupai_features"].get(qupai, {})
+                    self._send_json({
+                        "mode": "compare",
+                        "bare": {
+                            "system_prompt": bare_result["system_prompt"],
+                            "user_prompt": bare_result["user_prompt"],
+                            "raw_response": bare_result["raw_response"],
+                            "musicxml_b64": bare_result["musicxml_b64"],
+                            "saved_xml_path": bare_result["saved_xml_path"],
+                            "tokens": bare_result["tokens"],
+                            "api_time": bare_result["api_time"],
+                            "n_groups": bare_result["n_groups"],
+                            "evaluation": bare_eval,
+                        },
+                        "rich": {
+                            "system_prompt": rich_result["system_prompt"],
+                            "user_prompt": rich_result["user_prompt"],
+                            "raw_response": rich_result["raw_response"],
+                            "musicxml_b64": rich_result["musicxml_b64"],
+                            "saved_xml_path": rich_result["saved_xml_path"],
+                            "tokens": rich_result["tokens"],
+                            "api_time": rich_result["api_time"],
+                            "n_groups": rich_result["n_groups"],
+                            "evaluation": rich_eval,
+                        },
+                        "comparison": comparison,
+                        "qupai_features": {
+                            "name": qupai,
+                            "song_count": qf.get("song_count", 0),
+                            "start_pitches": qf.get("start_pitches", {}),
+                            "end_pitches": qf.get("end_pitches", {}),
+                            "pitch_stats": qf.get("pitch_stats", {}),
+                            "density": qf.get("density", {}),
+                            "region_distribution": qf.get("region_distribution", {}),
+                            "mode_distribution": qf.get("mode_distribution", {}),
+                        },
+                    })
+                else:
+                    result = generate(qupai, lyrics)
             except Exception as e:
                 self._send_json({"error": f"生成失败: {str(e)}"}, 500)
                 return
 
-            # 定量评估
-            eval_data = None
-            if result["gc_groups"]:
-                eval_data = evaluate_generated(
-                    result["gc_groups"], lyrics, qupai
-                )
+            if not compare_mode:
+                # 定量评估
+                eval_data = None
+                if result["gc_groups"]:
+                    eval_data = evaluate_generated(
+                        result["gc_groups"], lyrics, qupai
+                    )
 
-            qf = FEATURES["qupai_features"].get(qupai, {})
-            self._send_json({
+                qf = FEATURES["qupai_features"].get(qupai, {})
+                self._send_json({
                 "system_prompt": result["system_prompt"],
                 "user_prompt": result["user_prompt"],
                 "raw_response": result["raw_response"],
