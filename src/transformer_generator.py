@@ -303,6 +303,35 @@ class TransformerGenerator:
 
         return result_groups
 
+    def groups_to_items(self, groups: List[LyricNoteGroup]) -> List[Dict]:
+        """将 LyricNoteGroup 列表转为前端图形乐谱所需的 items 格式。
+
+        Returns:
+            [{char, rest:bool, notes:[{midi, name, dur}]}]
+        """
+        items = []
+        for g in groups:
+            if not g.notes or not g.notes[0].gongche:
+                continue
+            note_list = []
+            for n in g.notes:
+                midi = int(60 + n.gongche_pitch) if n.gongche_pitch else 60
+                # note name: use simple lookup
+                note_names = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
+                octave = (midi // 12) - 1
+                name = note_names[midi % 12] + str(octave) if 0 <= (midi % 12) < 12 else '?'
+                note_list.append({
+                    "midi": midi,
+                    "name": name,
+                    "dur": round(n.duration, 3),
+                })
+            items.append({
+                "char": g.lyric,
+                "rest": False,
+                "notes": note_list,
+            })
+        return items
+
 
 # 模块级便捷函数（供 web_app 调用）
 

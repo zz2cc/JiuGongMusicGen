@@ -178,13 +178,16 @@ def generate_bare(qupai, lyrics):
             "gc_groups": gc_groups}
 
 
-def generate_transformer(lyrics, gongdiao):
+def generate_transformer(lyrics, gongdiao, title="AI生成旋律"):
     """条件式 Transformer 直接生成旋律"""
     t0 = time.time()
     gen = get_transformer()
     gc_groups = gen.generate(lyrics, gongdiao)
     api_time = time.time() - t0
     n_notes = sum(len(g.notes) for g in gc_groups)
+
+    # 图形乐谱 items
+    items = gen.groups_to_items(gc_groups)
 
     mxl_b64 = ""
     saved_xml_path = ""
@@ -197,7 +200,7 @@ def generate_transformer(lyrics, gongdiao):
         line_indices = _compute_line_indices(lyrics)
         try:
             gongche_to_musicxml(lyric_groups=gc_groups, output_path=saved_xml_path,
-                                title=f"Trans: {gongdiao}", work_title="JiuGong-Transformer",
+                                title=title, work_title="JiuGong-Transformer",
                                 qupai=gongdiao, line_indices=line_indices)
             with open(saved_xml_path, "rb") as f:
                 mxl_b64 = base64.b64encode(f.read()).decode()
@@ -212,6 +215,7 @@ def generate_transformer(lyrics, gongdiao):
         "musicxml_b64": mxl_b64, "saved_xml_path": saved_xml_path,
         "tokens": n_notes, "api_time": round(api_time, 2),
         "n_groups": len(gc_groups), "gc_groups": gc_groups,
+        "items": items, "title": title,
     }
 
 
@@ -283,6 +287,14 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 .qupai-dropdown-item{padding:6px 10px;cursor:pointer;font-size:13px;border-bottom:1px solid #eee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .qupai-dropdown-item:hover,.qupai-dropdown-item.active{background:#fef3e0;color:#6b3410}
 .qupai-dropdown-item .cnt{font-size:10px;color:#a08060;margin-left:6px}
+/* Transformer 图形乐谱 */
+.t-score{display:flex;align-items:flex-end;gap:2px;min-height:200px;overflow-x:auto;padding:12px 0}
+.t-col{display:flex;flex-direction:column-reverse;align-items:center;min-width:36px}
+.t-col .t-note{width:32px;text-align:center;font-size:10px;border-radius:3px;margin:1px 0;padding:2px 0;
+  color:#fff;font-weight:600;line-height:1.3}
+.t-col .t-char{border-top:2px solid #8a5a2b;padding-top:4px;font-size:13px;font-weight:bold;color:#5c3a1e}
+.t-col.rest .t-note{background:transparent;color:#ccc;font-size:16px}
+.t-col.rest .t-char{color:#cbb89e;border-top-color:#ddd}
 </style>
 </head>
 <body>
@@ -311,17 +323,21 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 <div style="font-size:12px;color:#6b3410;margin-top:4px;padding:6px 10px;background:#fef9f0;border-radius:6px;border:1px solid #e0d5c0;min-height:20px" id="qupai-info">
 <span style="color:#a08060">尚未选择曲牌</span>
 </div>
+</div>
+<div id="transformer-controls" style="display:none">
+<div style="display:flex;gap:12px">
+<div style="flex:1"><label>宫调</label>
+<select id="gongdiao" size="5" style="width:100%"></select>
+<div style="font-size:11px;color:#8b6914;margin-top:2px" id="gongdiao-info"></div></div>
+<div style="flex:1"><label>曲名</label>
+<input type="text" id="trans-title" value="AI生成旋律" style="width:100%" /></div>
+</div>
+</div>
 
 <label>歌词内容（自动按标点换行）</label>
 <textarea id="lyrics" placeholder="小院春寒，梨花半落胭脂雨。绿窗朱户，燕绕秋千柱。" oninput="previewLines()">小院春寒，梨花半落胭脂雨。绿窗朱户，燕绕秋千柱。心事轻梳，欲语还羞住。风起处，落红无数，谁共斜阳暮？</textarea>
 <div class="preview-lines" id="line-preview"></div>
 
-</div>
-<div id="transformer-controls" style="display:none">
-<label>宫调 <span style="font-weight:normal;color:#a08060">（73种，选择宫调后由 Transformer 直接生成）</span></label>
-<select id="gongdiao" size="5" style="width:100%"></select>
-<div style="font-size:11px;color:#8b6914;margin-top:2px" id="gongdiao-info"></div>
-</div>
 <div style="margin-top:8px;font-size:12px;display:flex;align-items:center;gap:6px" id="compare-row">
 <input type="checkbox" id="compare-mode" style="width:auto;cursor:pointer">
 <label for="compare-mode" style="display:inline;margin:0;cursor:pointer;font-weight:normal">
@@ -357,6 +373,10 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 <div style="margin-top:10px">
 <a class="download-btn" id="dl-mxl" href="#" download="generated.musicxml">📥 下载 MusicXML</a>
 <a class="download-btn alt" id="dl-txt" href="#" download="generated.txt">📥 下载工尺谱</a>
+</div>
+<div id="trans-score-area" style="display:none">
+<div class="t-score" id="t-score"></div>
+<div style="font-size:11px;color:#8b6914;margin-top:4px" id="t-score-info"></div>
 </div>
 </div>
 <div id="tab-evaluation" class="tab-content card">
@@ -624,6 +644,7 @@ var reqBody = {lyrics:l};
 if (isTrans) {
   reqBody.mode = "transformer";
   reqBody.gongdiao = document.getElementById("gongdiao").value;
+  reqBody.title = document.getElementById("trans-title").value.trim() || "AI生成旋律";
 } else {
   var q = sel.value.trim();
   if (!q) { alert("请先选择一个曲牌"); b.disabled=false; b.textContent="🎵 生成音乐"; return; }
@@ -651,6 +672,45 @@ if (d.mode === "transformer") {
   document.getElementById("result-status").innerHTML =
     "<span>🧠 "+d.gongdiao+"</span><span>🎵 "+d.tokens+" 音符</span><span>⏱ "+d.api_time+"s</span><span>📐 "+d.n_groups+" 字音组</span>" +
     (d.saved_xml_path ? "<br><span style=\"font-size:11px\">📁 "+escHtml(d.saved_xml_path)+"</span>" : "");
+
+  // 图形乐谱
+  if (d.items && d.items.length > 0) {
+    var ti = d.items;
+    var allMidi = [];
+    ti.forEach(function(it){ if(!it.rest) it.notes.forEach(function(n){ allMidi.push(n.midi); }); });
+    var minM = allMidi.length ? Math.min.apply(null, allMidi) : 60;
+    var maxM = allMidi.length ? Math.max.apply(null, allMidi) : 72;
+    var span = Math.max(maxM - minM, 1);
+    var noteBg = function(midi) {
+      var t = (midi - minM) / span;
+      var r, g, b;
+      if (t < 0.33) { r=100; g=149; b=237; }  // 低音蓝
+      else if (t < 0.66) { r=60; g=179; b=113; } // 中音绿
+      else { r=205; g=92; b=92; } // 高音红
+      return "rgb("+r+","+g+","+b+")";
+    };
+    var scoreHtml = '';
+    ti.forEach(function(it){
+      if (it.rest) {
+        scoreHtml += '<div class="t-col rest"><div class="t-note">休</div><div class="t-char">'+escHtml(it.char)+'</div></div>';
+      } else {
+        var noteDivs = it.notes.map(function(n){
+          return '<div class="t-note" style="background:'+noteBg(n.midi)+'" title="'+n.name+'">'+n.name.replace(/\d/,'')+'</div>';
+        }).join('');
+        scoreHtml += '<div class="t-col"><div class="t-notes">'+noteDivs+'</div><div class="t-char">'+escHtml(it.char)+'</div></div>';
+      }
+    });
+    document.getElementById("t-score").innerHTML = scoreHtml;
+    var firstNote = (ti[0] && ti[0].notes && ti[0].notes[0]) ? ti[0].notes[0].name : '?';
+    var lastItem = (ti[ti.length-1] && ti[ti.length-1].notes) ? ti[ti.length-1].notes : [];
+    var lastNote = lastItem.length ? lastItem[lastItem.length-1].name : '?';
+    document.getElementById("t-score-info").textContent = "音域: "+firstNote+" ~ "+lastNote+" | 色调: 低音蓝→中音绿→高音红";
+    document.getElementById("trans-score-area").style.display = "block";
+  } else {
+    document.getElementById("trans-score-area").style.display = "none";
+  }
+
+  // 工尺谱文本（折叠在下方）
   var raw = d.raw_response || "";
   document.getElementById("gongche-output").innerHTML =
     "<pre style=\"background:transparent;color:#5c2e0e;font-size:16px;line-height:2;letter-spacing:2px;max-height:500px;white-space:pre-wrap;padding:0;margin:0;\">" + escHtml(raw) + "</pre>";
@@ -674,6 +734,7 @@ if (d.mode === "transformer") {
 }
 if (d.mode === "compare") {
   // === 上部：Rich 数据填充正常 Tab 区 ===
+  document.getElementById("trans-score-area").style.display = "none";
   document.getElementById("result-area").style.display = "block";
   document.getElementById("compare-result-area").style.display = "block";
 
@@ -763,6 +824,7 @@ if (d.mode === "compare") {
   return;
 }
 document.getElementById("compare-result-area").style.display = "none";
+document.getElementById("trans-score-area").style.display = "none";
 document.getElementById("result-area").style.display = "block";
 document.getElementById("status-line").innerHTML = "Complete - "+d.tokens+" tokens - "+d.api_time+"s - "+d.n_groups+" groups";
 document.getElementById("result-status").innerHTML =
@@ -1004,7 +1066,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"error": "请选择宫调"}, 400)
                     return
                 try:
-                    result = generate_transformer(lyrics, gongdiao)
+                    title = data.get("title", "").strip() or "AI生成旋律"
+                    result = generate_transformer(lyrics, gongdiao, title=title)
                 except Exception as e:
                     self._send_json({"error": f"生成失败: {str(e)}"}, 500)
                     return
@@ -1015,6 +1078,8 @@ class Handler(BaseHTTPRequestHandler):
                     "mode": "transformer",
                     "engine": "transformer",
                     "gongdiao": gongdiao,
+                    "title": result.get("title", ""),
+                    "items": result.get("items", []),
                     "raw_response": result["raw_response"],
                     "musicxml_b64": result["musicxml_b64"],
                     "saved_xml_path": result["saved_xml_path"],
