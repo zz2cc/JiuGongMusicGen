@@ -50,7 +50,8 @@ python build_features.py
 JiuGongDataSet/
 ├── web_app.py                # Web 界面入口
 ├── build_features.py         # 特征缓存构建（一次性）
-├── run_rich_generate.py      # 命令行生成入口
+├── run_rich_generate.py      # Rich Prompt 生成
+├── run_generate.py           # 基础生成
 ├── 启动.bat                   # Windows 一键启动
 ├── requirements.txt
 ├── README.md
@@ -59,21 +60,22 @@ JiuGongDataSet/
 │   ├── gongche_vocab.py       # 工尺谱词表、编码、解析
 │   ├── musicxml_writer.py     # 工尺谱 → MusicXML 转换
 │   ├── qupai_index.py         # 曲牌索引与 Few-Shot 检索
-│   ├── prompt_templates.py    # Prompt 模板工程
+│   ├── prompt_templates.py    # Prompt 模板（含 Bare/Rich）
 │   ├── deepseek_client.py     # DeepSeek API 客户端
 │   ├── generator.py           # 主生成管线
-│   ├── evaluator.py           # 评估系统
+│   ├── evaluator.py           # 原有评估器
 │   ├── feature_extractor.py   # 特征提取器
 │   ├── rich_prompt.py         # Rich Prompt 构建器
+│   ├── quantitative_eval.py   # 定量评估系统
+│   ├── tone_aligner.py        # 声调标注
 │   └── config.py              # 配置文件
-├── features_cache.json        # 特征缓存（预计算，3.6 MB）
-├── features_cache.pkl         # 特征缓存（二进制，加载更快）
+├── features_cache.json        # 预计算特征缓存 (3.6 MB)
 ├── FINAL_SONGS.csv            # 歌曲元数据 (6,563首)
 ├── FINAL_NOTES.csv            # 音符数据 (~696K行)
 ├── FINAL_BEATS.csv            # 板拍数据 (~296K行)
 ├── musicxml/                  # 原始 MusicXML 文件 (6,563个)
 └── experiments/
-    └── outputs/               # 生成输出（.txt + .musicxml）
+    └── outputs/               # 生成输出（.txt + .musicxml + .eval.json）
 ```
 
 ## 工尺谱输出格式
@@ -97,14 +99,35 @@ JiuGongDataSet/
 
 ## 评估指标
 
-| 指标 | 说明 |
-|------|------|
-| 格式合规率 | 输出是否可解析为有效工尺谱 |
-| 音高覆盖率 | 是否使用了该曲牌的典型音高 |
-| 音域匹配 | 生成旋律的音域是否合理 |
-| 板拍密度 | 每字对应音符数是否合理 |
-| 起音/收音 | 首音与末音是否符合曲牌惯例 |
-| 音程分布 | 音程跳跃模式是否匹配 |
+系统对每次生成进行**定量评估**，分为两大维度：
+
+### 风格相似度（70% 权重）
+
+| 指标 | 说明 | 参考基准 |
+|------|------|----------|
+| 格式合规率 | 输出是否可解析为有效工尺谱 | GONGCHE_TO_PITCH 字典 |
+| 音高分布匹配 | 工尺字使用频次 vs 曲牌数据集分布 | qupai_features.pitch_distribution |
+| 音程分布匹配 | 音程跳跃模式余弦相似度 | qupai_features.interval_distribution |
+| 密度匹配 | 每字音符数 vs 曲牌均值 | qupai_features.density |
+| 拖腔匹配 | 拖腔率 + 句中位置分布 | qupai_features.melisma |
+| 起收音匹配 | 首音/末音 ±3 半音邻近匹配 | qupai_features.start/end_pitches |
+| 音域匹配 | 音高跨度比值 | qupai_features.pitch_stats |
+
+### 声调对齐度（30% 权重）
+
+| 方法 | 说明 | 参考基准 |
+|------|------|----------|
+| 规则判断 | 依字行腔规则：平声稳、上声升、去声降、入声短 | 传统曲唱理论 |
+| 数据驱动 | 按声调聚合后与数据集 69 万音符统计对比 | tone_features.guangyun_tones |
+
+### 对比模式
+
+勾选「对比模式」复选框，系统同时用**极简提示词（Bare）**和**提示词工程（Rich）**各生成一次，右侧展示 Rich 完整评估报告，下方展示 Bare 工尺谱 + 逐项提升差异表，直观量化 Prompt Engineering 的效果。
+
+### 句间休止
+
+生成的 MusicXML 在每句歌词之间自动插入小幅休止符（八分音符时值），使播放时有自然的句读停顿。
+
 
 ## 数据集
 
@@ -117,3 +140,8 @@ JiuGongDataSet/
 - **14** 个工尺谱字符
 
 数据来源：香港理工大学《九宫大成》数据库
+
+## License
+
+MIT
+
