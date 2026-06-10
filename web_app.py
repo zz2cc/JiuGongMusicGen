@@ -868,15 +868,21 @@ function renderEval(e, prefix) {
   document.getElementById("eval-tone-data").textContent = pct(e.tone_data_overall);
   document.getElementById("eval-meta").textContent = prefix + (e.timestamp || '') + " | " + (e.qupai || '') + " | " + (e.lyrics || '').slice(0,20);
 
-  // 风格指标
-  var styleNames = {"format_compliance":"格式合规","pitch_distribution":"音高分布匹配","interval_distribution":"音程分布匹配","density_match":"密度匹配","melisma_match":"拖腔匹配","boundary_match":"起收音匹配","range_match":"音域匹配"};
+  // 风格指标 — 检测是否为宫调模式
+  var isModeEval = e.style_scores && Object.keys(e.style_scores).length <= 5;
+  var styleNames = isModeEval
+    ? {"pitch_distribution":"音高分布匹配","interval_distribution":"音程分布匹配","range_match":"音域匹配"}
+    : {"format_compliance":"格式合规","pitch_distribution":"音高分布匹配","interval_distribution":"音程分布匹配","density_match":"密度匹配","melisma_match":"拖腔匹配","boundary_match":"起收音匹配","range_match":"音域匹配"};
   var styleHtml = "";
   for(var k in styleNames){
     var v = (e.style_scores && e.style_scores[k] != null) ? e.style_scores[k] : 0;
     var p = (v*100).toFixed(0);
     styleHtml += '<div style="margin:3px 0"><span style="display:inline-block;width:110px">'+styleNames[k]+'</span>'+
-      '<span style="display:inline-block;height:16px;background:linear-gradient(90deg,#8b4513,#d4a574);border-radius:3px;vertical-align:middle;width:'+(p*2)+'px;min-width:'+(p>0?'2px':'0')+'"></span>'+
+      '<span style="display:inline-block;height:16px;background:linear-gradient(90deg,'+(isModeEval?'#1565c0':'#8b4513')+','+(isModeEval?'#64b5f6':'#d4a574')+');border-radius:3px;vertical-align:middle;width:'+(p*2)+'px;min-width:'+(p>0?'2px':'0')+'"></span>'+
       '<span style="font-size:11px;margin-left:6px">'+p+'%</span></div>';
+  }
+  if (isModeEval) {
+    styleHtml += '<div style="font-size:10px;color:#888;margin-top:4px">注：Transformer 模型不评估格式合规/密度/拖腔/起收音（宫调级无此参考数据）</div>';
   }
   document.getElementById("eval-style-detail").innerHTML = styleHtml;
 
@@ -963,7 +969,6 @@ function renderEval(e, prefix) {
   // 渲染指标计算说明
   if(e.metric_descriptions){
     var descHtml = '';
-    var isModeEval = e.mode_metric_descriptions && Object.keys(e.style_scores||{}).length <= 5;
     var styleKeys = isModeEval
       ? ['pitch_distribution','interval_distribution','range_match','style_overall']
       : ['format_compliance','pitch_distribution','interval_distribution','density_match','melisma_match','boundary_match','range_match','style_overall'];
