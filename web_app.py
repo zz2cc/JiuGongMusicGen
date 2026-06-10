@@ -701,10 +701,11 @@ if (d.mode === "transformer") {
       }
     });
     document.getElementById("t-score").innerHTML = scoreHtml;
-    var firstNote = (ti[0] && ti[0].notes && ti[0].notes[0]) ? ti[0].notes[0].name : '?';
-    var lastItem = (ti[ti.length-1] && ti[ti.length-1].notes) ? ti[ti.length-1].notes : [];
-    var lastNote = lastItem.length ? lastItem[lastItem.length-1].name : '?';
-    document.getElementById("t-score-info").textContent = "音域: "+firstNote+" ~ "+lastNote+" | 色调: 低音蓝→中音绿→高音红";
+    var midiToName = function(m) {
+      var nn = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+      return nn[m % 12] + (Math.floor(m / 12) - 1);
+    };
+    document.getElementById("t-score-info").textContent = "音域: "+midiToName(minM)+" ~ "+midiToName(maxM)+" | 色调: 低音蓝→中音绿→高音红";
     document.getElementById("trans-score-area").style.display = "block";
   } else {
     document.getElementById("trans-score-area").style.display = "none";
