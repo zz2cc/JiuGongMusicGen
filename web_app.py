@@ -18,6 +18,7 @@ from src.gongche_vocab import parse_compact_gongche
 from src.musicxml_writer import gongche_to_musicxml
 from src.data_loader import get_dataset as _get_ds
 from src.quantitative_eval import QuantitativeEvaluator, eval_result_to_dict
+from src.transformer_generator import load_generator as _load_tgen, list_gongs as _list_gongs
 
 # ---- 全局初始化 ----
 print("Loading...")
@@ -41,7 +42,9 @@ for name, feat in FEATURES["qupai_features"].items():
     })
 QUPAI_DATA.sort(key=lambda x: -x["count"])
 QUPAI_JSON = json.dumps(QUPAI_DATA, ensure_ascii=False)
-print(f"Ready: {len(QUPAI_DATA)} qupai")
+_gongs_list = _list_gongs()   # 仅读 checkpoint 元数据，不加载模型
+GONGS_JSON = json.dumps(_gongs_list, ensure_ascii=False)
+print(f"Ready: {len(QUPAI_DATA)} qupai, {len(_gongs_list)} gongdiao")
 
 # 评估器（延迟初始化）
 _evaluator = None
@@ -51,6 +54,19 @@ def get_evaluator():
     if _evaluator is None:
         _evaluator = QuantitativeEvaluator(FEATURES)
     return _evaluator
+
+# Transformer 生成器（延迟加载）
+_tgen = None
+def get_transformer():
+    global _tgen
+    if _tgen is None:
+        _tgen = _load_tgen()
+    return _tgen
+
+# 宫调列表（启动时已加载）
+def get_gongs():
+    return _gongs_list
+    return _GONGS
 
 
 def _compute_line_indices(lyrics: str) -> list:
@@ -162,6 +178,43 @@ def generate_bare(qupai, lyrics):
             "gc_groups": gc_groups}
 
 
+def generate_transformer(lyrics, gongdiao):
+    """条件式 Transformer 直接生成旋律"""
+    t0 = time.time()
+    gen = get_transformer()
+    gc_groups = gen.generate(lyrics, gongdiao)
+    api_time = time.time() - t0
+    n_notes = sum(len(g.notes) for g in gc_groups)
+
+    mxl_b64 = ""
+    saved_xml_path = ""
+    if gc_groups:
+        out_dir = Path("experiments/outputs")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_go = re.sub(r'[《》\s]', '', gongdiao)
+        safe_ly = re.sub(r'[《》\s\n，,。！!？?；;、]', '', lyrics)[:10]
+        saved_xml_path = str(out_dir / f"trans_{safe_go}_{safe_ly}.musicxml")
+        line_indices = _compute_line_indices(lyrics)
+        try:
+            gongche_to_musicxml(lyric_groups=gc_groups, output_path=saved_xml_path,
+                                title=f"Trans: {gongdiao}", work_title="JiuGong-Transformer",
+                                qupai=gongdiao, line_indices=line_indices)
+            with open(saved_xml_path, "rb") as f:
+                mxl_b64 = base64.b64encode(f.read()).decode()
+        except Exception:
+            saved_xml_path = ""
+
+    return {
+        "raw_response": "\n".join(
+            f"{g.lyric}[{' '.join(n.gongche for n in g.notes)}]"
+            for g in gc_groups
+        ),
+        "musicxml_b64": mxl_b64, "saved_xml_path": saved_xml_path,
+        "tokens": n_notes, "api_time": round(api_time, 2),
+        "n_groups": len(gc_groups), "gc_groups": gc_groups,
+    }
+
+
 def evaluate_generated(gc_groups, lyrics, qupai):
     """对生成结果进行定量评估（非致命：失败不影响生成）"""
     try:
@@ -243,6 +296,12 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 <div>
 <div class="card">
 <h2>📝 创作参数</h2>
+<label>生成引擎</label>
+<div style="display:flex;gap:16px;margin-bottom:10px;font-size:13px">
+<label style="display:inline;font-weight:normal;cursor:pointer"><input type="radio" name="engine" value="llm" checked onchange="switchEngine()"> 🤖 LLM + Prompt（DeepSeek API，选曲牌）</label>
+<label style="display:inline;font-weight:normal;cursor:pointer"><input type="radio" name="engine" value="transformer" onchange="switchEngine()"> 🧠 Transformer 模型（本地推理，选宫调）</label>
+</div>
+<div id="llm-controls">
 <label>曲牌名 <span style="font-weight:normal;color:#a08060">（输入1-2字搜索，点击下拉选取）</span></label>
 <div style="position:relative">
 <input type="text" id="qupai-filter" placeholder="输入曲牌名搜索..." autocomplete="off" oninput="filterQupai()" onfocus="filterQupai()" onkeydown="handleQupaiKey(event)">
@@ -257,7 +316,13 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 <textarea id="lyrics" placeholder="小院春寒，梨花半落胭脂雨。绿窗朱户，燕绕秋千柱。" oninput="previewLines()">小院春寒，梨花半落胭脂雨。绿窗朱户，燕绕秋千柱。心事轻梳，欲语还羞住。风起处，落红无数，谁共斜阳暮？</textarea>
 <div class="preview-lines" id="line-preview"></div>
 
-<div style="margin-top:8px;font-size:12px;display:flex;align-items:center;gap:6px">
+</div>
+<div id="transformer-controls" style="display:none">
+<label>宫调 <span style="font-weight:normal;color:#a08060">（73种，选择宫调后由 Transformer 直接生成）</span></label>
+<select id="gongdiao" size="5" style="width:100%"></select>
+<div style="font-size:11px;color:#8b6914;margin-top:2px" id="gongdiao-info"></div>
+</div>
+<div style="margin-top:8px;font-size:12px;display:flex;align-items:center;gap:6px" id="compare-row">
 <input type="checkbox" id="compare-mode" style="width:auto;cursor:pointer">
 <label for="compare-mode" style="display:inline;margin:0;cursor:pointer;font-weight:normal">
 对比模式（Bare无提示词 + Rich提示词工程，双路生成后并排对比）
@@ -367,6 +432,7 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 
 <script>
 var QDATA = __QUPAI_DATA__;
+var GONGS = __GONGS_DATA__;
 var sel = document.getElementById("qupai");
 var filterInput = document.getElementById("qupai-filter");
 var infoDiv = document.getElementById("qupai-info");
@@ -499,6 +565,28 @@ updateInfo();
 
 function escHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+// Gongdiao select
+var gongdiaoSel = document.getElementById("gongdiao");
+GONGS.forEach(function(g, i){
+  var o = document.createElement("option");
+  o.value = g; o.textContent = g;
+  if (i === 0) o.selected = true;
+  gongdiaoSel.appendChild(o);
+});
+gongdiaoSel.addEventListener("change", function(){
+  document.getElementById("gongdiao-info").textContent = "已选: " + gongdiaoSel.value;
+});
+document.getElementById("gongdiao-info").textContent = "已选: " + GONGS[0];
+
+// Engine switching
+function switchEngine() {
+  var isTrans = document.querySelector('input[name="engine"]:checked').value === "transformer";
+  document.getElementById("llm-controls").style.display = isTrans ? "none" : "block";
+  document.getElementById("transformer-controls").style.display = isTrans ? "block" : "none";
+  document.getElementById("compare-row").style.display = isTrans ? "none" : "block";
+}
+switchEngine();
+
 function splitLyrics(text) {
   var withBreaks = text.replace(/[，,。！!？?；;、]/g, '\n');
   return withBreaks.split(/\n+/).filter(function(s){return s.trim().length>0});
@@ -520,22 +608,30 @@ previewLines();
 
 var lastResult = null;
 async function doGenerate(){
-var q = sel.value.trim();
-if (!q) { alert("请先在列表中选择一个曲牌"); return; }
+var isTrans = document.querySelector('input[name="engine"]:checked').value === "transformer";
 var rawText = document.getElementById("lyrics").value.trim();
 var lines = splitLyrics(rawText);
 var l = lines.join("\n");
-if(!q||!l){alert("请填写歌词");return}
+if(!l){alert("请填写歌词");return}
 
-var isCompare = document.getElementById("compare-mode").checked;
 var b = document.getElementById("gen-btn");
 b.disabled = true;
-b.textContent = isCompare ? "生成中(对比)..." : "生成中...";
+b.textContent = isTrans ? "生成中(Transformer)..." : "生成中...";
 document.getElementById("status-line").innerHTML = "<span class='loading'>⏳ 正在生成...</span>";
 
 try{
-var reqBody = {qupai:q, lyrics:l};
-if (isCompare) reqBody.compare = true;
+var reqBody = {lyrics:l};
+if (isTrans) {
+  reqBody.mode = "transformer";
+  reqBody.gongdiao = document.getElementById("gongdiao").value;
+} else {
+  var q = sel.value.trim();
+  if (!q) { alert("请先选择一个曲牌"); b.disabled=false; b.textContent="🎵 生成音乐"; return; }
+  reqBody.qupai = q;
+  var isCompare = document.getElementById("compare-mode").checked;
+  if (isCompare) reqBody.compare = true;
+  b.textContent = isCompare ? "生成中(对比)..." : "生成中...";
+}
 var r = await fetch("/api/generate",{
   method:"POST",
   headers:{"Content-Type":"application/json"},
@@ -548,6 +644,34 @@ var d = await r.json();
 if(d.error){alert(d.error);b.disabled=false;b.textContent="🎵 生成音乐";return}
 
 lastResult = d;
+if (d.mode === "transformer") {
+  document.getElementById("compare-result-area").style.display = "none";
+  document.getElementById("result-area").style.display = "block";
+  document.getElementById("status-line").innerHTML = "✅ Transformer 生成完成 · "+d.tokens+" 音符 · "+d.api_time+"s · "+d.n_groups+" 字音组";
+  document.getElementById("result-status").innerHTML =
+    "<span>🧠 "+d.gongdiao+"</span><span>🎵 "+d.tokens+" 音符</span><span>⏱ "+d.api_time+"s</span><span>📐 "+d.n_groups+" 字音组</span>" +
+    (d.saved_xml_path ? "<br><span style=\"font-size:11px\">📁 "+escHtml(d.saved_xml_path)+"</span>" : "");
+  var raw = d.raw_response || "";
+  document.getElementById("gongche-output").innerHTML =
+    "<pre style=\"background:transparent;color:#5c2e0e;font-size:16px;line-height:2;letter-spacing:2px;max-height:500px;white-space:pre-wrap;padding:0;margin:0;\">" + escHtml(raw) + "</pre>";
+  document.getElementById("sys-prompt").textContent = "（Transformer 模型直接生成，不使用 Prompt）";
+  document.getElementById("usr-prompt").textContent = "宫调: " + d.gongdiao + " | 歌词: " + l;
+  document.getElementById("raw-resp").textContent = d.raw_response;
+  document.getElementById("feat-data").textContent = JSON.stringify({gongdiao: d.gongdiao, engine: "transformer"}, null, 2);
+  if (d.musicxml_b64) {
+    var mx = document.getElementById("dl-mxl");
+    mx.href = "data:application/vnd.recordare.musicxml+xml;base64,"+d.musicxml_b64;
+    mx.download = "trans_"+d.gongdiao+"_"+l.replace(/\n/g,"").slice(0,8)+".musicxml";
+  }
+  var tx = document.getElementById("dl-txt");
+  tx.href = "data:text/plain;charset=utf-8,"+encodeURIComponent(d.raw_response);
+  tx.download = "trans_"+d.gongdiao+"_"+l.replace(/\n/g,"").slice(0,8)+".txt";
+  if (d.evaluation) { renderEval(d.evaluation, "Transformer | "); }
+  switchTab("gongche");
+  b.disabled = false;
+  b.textContent = "🎵 生成音乐";
+  return;
+}
 if (d.mode === "compare") {
   // === 上部：Rich 数据填充正常 Tab 区 ===
   document.getElementById("result-area").style.display = "block";
@@ -846,7 +970,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/" or self.path == "/index.html":
-            self._send_html(HTML_PAGE.replace("__QUPAI_DATA__", QUPAI_JSON))
+            self._send_html(HTML_PAGE.replace("__QUPAI_DATA__", QUPAI_JSON).replace("__GONGS_DATA__", GONGS_JSON))
+        elif self.path == "/api/gongs":
+            self._send_json({"gongs": get_gongs()})
         else:
             self.send_response(404)
             self.end_headers()
@@ -865,10 +991,43 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "无效的 JSON 请求"}, 400)
                 return
 
+            engine = data.get("mode", "llm")  # "transformer" | "llm"
+            gongdiao = data.get("gongdiao", "").strip()
             qupai = data.get("qupai", "").strip()
             lyrics = data.get("lyrics", "").strip()
-            if not qupai or not lyrics:
-                self._send_json({"error": "请提供曲牌名和歌词"}, 400)
+            if not lyrics:
+                self._send_json({"error": "请填写歌词"}, 400)
+                return
+
+            if engine == "transformer":
+                if not gongdiao:
+                    self._send_json({"error": "请选择宫调"}, 400)
+                    return
+                try:
+                    result = generate_transformer(lyrics, gongdiao)
+                except Exception as e:
+                    self._send_json({"error": f"生成失败: {str(e)}"}, 500)
+                    return
+                eval_data = None
+                if result["gc_groups"]:
+                    eval_data = evaluate_generated(result["gc_groups"], lyrics, gongdiao)
+                self._send_json({
+                    "mode": "transformer",
+                    "engine": "transformer",
+                    "gongdiao": gongdiao,
+                    "raw_response": result["raw_response"],
+                    "musicxml_b64": result["musicxml_b64"],
+                    "saved_xml_path": result["saved_xml_path"],
+                    "tokens": result["tokens"],
+                    "api_time": result["api_time"],
+                    "n_groups": result["n_groups"],
+                    "evaluation": eval_data,
+                })
+                return
+
+            # ---- LLM 模式（原有逻辑）----
+            if not qupai:
+                self._send_json({"error": "请提供曲牌名"}, 400)
                 return
             if qupai not in FEATURES["qupai_features"]:
                 self._send_json({"error": f"曲牌「{qupai}」不在数据集中"}, 400)

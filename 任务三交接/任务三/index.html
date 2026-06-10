@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>依字行腔 · 旋律生成</title>
+<style>
+  :root {
+    --ink: #3a2e21;
+    --ink-soft: #8a7a64;
+    --bg: #f5efe4;
+    --card: #fcf8ef;
+    --line: #ddd0ba;
+    --accent: #8a5a2b;
+    --accent-soft: #b08456;
+    --shadow: 0 1px 3px rgba(90,60,20,0.08);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 80px; }
+  h1 { font-size: 28px; font-weight: 600; margin: 0 0 4px; letter-spacing: 3px; color: var(--accent); }
+  .sub { color: var(--ink-soft); font-size: 14px; margin: 0 0 36px; }
+  label { display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  textarea, select, input[type="text"] {
+    width: 100%; border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px 14px; font-family: inherit; font-size: 16px;
+    color: var(--ink); background: var(--card);
+  }
+  textarea { min-height: 90px; resize: vertical; line-height: 1.9; letter-spacing: 1px; }
+  textarea:focus, select:focus, input:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(138,90,43,0.12);
+  }
+  .field { margin-bottom: 22px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .row .field { flex: 1; min-width: 200px; }
+  .tip { font-size: 12.5px; color: var(--ink-soft); margin-top: 6px; }
+  button {
+    font-family: inherit; font-size: 16px; font-weight: 600; letter-spacing: 3px;
+    color: #fff; background: var(--accent); border: none; padding: 13px 32px;
+    border-radius: 8px; cursor: pointer; transition: background 0.15s;
+  }
+  button:hover:not(:disabled) { background: #6f461f; }
+  button:disabled { opacity: 0.5; cursor: wait; }
+  .actions { display: flex; align-items: center; gap: 16px; margin-top: 6px; }
+  .status { font-size: 14px; color: var(--ink-soft); }
+  .status.err { color: #a8412e; }
+  .result { margin-top: 36px; display: none; }
+  .result.show { display: block; }
+  .result-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+  .result-head .rt { font-size: 18px; font-weight: 600; color: var(--accent); }
+  .result-head .rm { font-size: 13px; color: var(--ink-soft); }
+
+  /* 谱：每个字一列，字上方竖排它的音 */
+  .score {
+    position: relative;
+    background:
+      linear-gradient(var(--card), var(--card));
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(120,80,30,0.07), inset 0 0 0 1px rgba(255,255,255,0.5);
+    padding: 30px 26px 22px;
+    overflow-x: auto;
+    display: flex; align-items: flex-end; gap: 2px;
+  }
+  .col { display: flex; flex-direction: column; align-items: center; min-width: 44px; }
+  .col .pitches {
+    display: flex; flex-direction: column-reverse; align-items: center;
+    gap: 5px; margin-bottom: 14px; min-height: 22px;
+  }
+  .col .pitch {
+    display: flex; flex-direction: column; align-items: center;
+    min-width: 30px; padding: 3px 7px 4px; border-radius: 6px;
+    background: rgba(138,90,43,0.07);
+    font-size: 13px; color: var(--accent); font-weight: 600;
+    font-variant-numeric: tabular-nums; line-height: 1.1; text-align: center;
+    letter-spacing: 0.5px;
+  }
+  .col .pitch .d {
+    display: block; color: var(--accent-soft); font-size: 8.5px;
+    font-weight: 500; margin-top: 1px; letter-spacing: 0;
+  }
+  .col .char {
+    font-size: 23px; font-weight: 600; color: var(--ink);
+    padding-top: 12px; width: 100%; text-align: center;
+    position: relative; letter-spacing: 1px;
+  }
+  /* 贯穿的谱基线 */
+  .col .char::before {
+    content: ""; position: absolute; top: 0; left: -1px; right: -1px;
+    height: 1px; background: var(--line);
+  }
+  .col.rest { min-width: 22px; justify-content: flex-end; }
+  .col.rest .char { color: #cbb89e; font-size: 16px; }
+  .col.rest .char::before { display: none; }
+
+  .dl {
+    display: inline-block; margin-top: 18px; text-decoration: none;
+    color: var(--accent); border: 1px solid var(--accent); border-radius: 8px;
+    padding: 10px 24px; font-size: 15px; font-weight: 600; letter-spacing: 1px;
+  }
+  .dl:hover { background: var(--accent); color: #fff; }
+  @media (max-width: 480px) {
+    .wrap { padding: 32px 16px 60px; }
+    h1 { font-size: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>依字行腔</h1>
+  <p class="sub">输入歌词，选择宫调，生成旋律并下载 MusicXML</p>
+
+  <div class="field">
+    <label>歌词</label>
+    <textarea id="lyrics" placeholder="例：春花秋月何时了，往事知多少。">春花秋月何时了，往事知多少。</textarea>
+    <p class="tip">逐字生成音高与时值；逗号、句号作为停顿与断句。</p>
+  </div>
+
+  <div class="row">
+    <div class="field">
+      <label>宫调</label>
+      <select id="gong"><option>加载中…</option></select>
+    </div>
+    <div class="field">
+      <label>曲名</label>
+      <input type="text" id="title" value="AI生成旋律" />
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="go">生成曲谱</button>
+    <span class="status" id="status"></span>
+  </div>
+
+  <div class="result" id="result">
+    <div class="result-head">
+      <span class="rt" id="rt"></span>
+      <span class="rm" id="rm"></span>
+    </div>
+    <div class="score" id="score"></div>
+    <a class="dl" id="dl" href="#" download>下载 MusicXML</a>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let lastUrl = null;
+
+fetch("/api/gongs")
+  .then((r) => r.json())
+  .then((d) => {
+    const sel = $("gong");
+    sel.innerHTML = "";
+    d.gongs.forEach((g) => {
+      const o = document.createElement("option");
+      o.value = g; o.textContent = g;
+      sel.appendChild(o);
+    });
+  })
+  .catch(() => { $("gong").innerHTML = "<option>加载失败，请确认后端已启动</option>"; });
+
+// 每个字一列：字在下，它的音（一字多音则竖排）在上
+function renderScore(items) {
+  const score = $("score");
+  score.innerHTML = "";
+
+  // 全曲音高范围，用于把每个音映射成底色深浅（越高越深，暗示旋律起伏）
+  const allMidi = [];
+  items.forEach((it) => { if (!it.rest) it.notes.forEach((n) => allMidi.push(n.midi)); });
+  const minM = allMidi.length ? Math.min(...allMidi) : 60;
+  const maxM = allMidi.length ? Math.max(...allMidi) : 72;
+  const span = Math.max(maxM - minM, 1);
+  const chipBg = (midi) => {
+    const t = (midi - minM) / span;          // 0..1
+    const alpha = (0.05 + t * 0.16).toFixed(3); // 低音浅、高音深
+    return "rgba(138,90,43," + alpha + ")";
+  };
+
+  items.forEach((it) => {
+    const col = document.createElement("div");
+    if (it.rest) {
+      col.className = "col rest";
+      const ch = document.createElement("div");
+      ch.className = "char";
+      ch.textContent = it.char;
+      col.appendChild(ch);
+      score.appendChild(col);
+      return;
+    }
+    col.className = "col";
+    const pit = document.createElement("div");
+    pit.className = "pitches";
+    it.notes.forEach((n) => {
+      const p = document.createElement("div");
+      p.className = "pitch";
+      p.style.background = chipBg(n.midi);
+      p.innerHTML = n.name + '<span class="d"> ' + n.dur + '</span>';
+      pit.appendChild(p);
+    });
+    const ch = document.createElement("div");
+    ch.className = "char";
+    ch.textContent = it.char;
+    col.appendChild(pit);
+    col.appendChild(ch);
+    score.appendChild(col);
+  });
+}
+
+$("go").addEventListener("click", async () => {
+  const lyrics = $("lyrics").value.trim();
+  const gongdiao = $("gong").value;
+  const title = $("title").value.trim() || "AI生成旋律";
+  const status = $("status"), result = $("result");
+
+  if (!lyrics) { status.textContent = "请先填入歌词"; status.className = "status err"; return; }
+
+  $("go").disabled = true;
+  result.className = "result";
+  status.className = "status";
+  status.textContent = "生成中…";
+
+  try {
+    const resp = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lyrics, gongdiao, title }),
+    });
+    if (!resp.ok) {
+      let msg = "生成失败";
+      try { msg = (await resp.json()).error || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    const d = await resp.json();
+    renderScore(d.items);
+
+    const bytes = Uint8Array.from(atob(d.musicxml_base64), (c) => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: "application/vnd.recordare.musicxml+xml" });
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl = URL.createObjectURL(blob);
+    const safe = title.replace(/[^\w\u4e00-\u9fa5-]/g, "") || "melody";
+    $("dl").href = lastUrl;
+    $("dl").download = safe + ".musicxml";
+
+    $("rt").textContent = title;
+    $("rm").textContent = d.gongdiao + " · " + d.note_count + " 个音符";
+    result.className = "result show";
+    status.textContent = "";
+  } catch (err) {
+    status.textContent = err.message;
+    status.className = "status err";
+  } finally {
+    $("go").disabled = false;
+  }
+});
+</script>
+</body>
+</html>
