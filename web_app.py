@@ -219,14 +219,19 @@ def generate_transformer(lyrics, gongdiao, title="AI生成旋律"):
     }
 
 
-def evaluate_generated(gc_groups, lyrics, qupai):
-    """对生成结果进行定量评估（非致命：失败不影响生成）"""
+def evaluate_generated(gc_groups, lyrics, qupai, reference_mode="llm"):
+    """对生成结果进行定量评估（非致命：失败不影响生成）
+
+    Args:
+        reference_mode: "llm"（曲牌评估）或 "transformer"（宫调评估）
+    """
     try:
         ev = get_evaluator()
         result = ev.evaluate(
             generated_groups=gc_groups,
             lyrics=lyrics,
             qupai=qupai,
+            reference_mode=reference_mode,
         )
         out_dir = Path("experiments/outputs")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -958,17 +963,21 @@ function renderEval(e, prefix) {
   // 渲染指标计算说明
   if(e.metric_descriptions){
     var descHtml = '';
-    var styleKeys = ['format_compliance','pitch_distribution','interval_distribution','density_match','melisma_match','boundary_match','range_match','style_overall'];
+    var isModeEval = e.mode_metric_descriptions && Object.keys(e.style_scores||{}).length <= 5;
+    var styleKeys = isModeEval
+      ? ['pitch_distribution','interval_distribution','range_match','style_overall']
+      : ['format_compliance','pitch_distribution','interval_distribution','density_match','melisma_match','boundary_match','range_match','style_overall'];
     var toneKeys = ['tone_rule_scores','tone_data_scores','tone_overall'];
     var allKeys = styleKeys.concat(toneKeys).concat(['overall_score']);
+    var descSource = isModeEval && e.mode_metric_descriptions ? e.mode_metric_descriptions : e.metric_descriptions;
     allKeys.forEach(function(k){
-      var d = e.metric_descriptions[k];
+      var d = descSource[k] || e.metric_descriptions[k];
       if(d){
-        descHtml += '<div style="margin:6px 0;padding:6px 8px;border-left:3px solid #d4a574;background:#fefdf8">';
+        descHtml += '<div style="margin:6px 0;padding:6px 8px;border-left:3px solid '+(isModeEval?'#1565c0':'#d4a574')+';background:#fefdf8">';
         descHtml += '<b style="color:#6b3410">'+escHtml(d.label)+'</b>';
         descHtml += '<div style="color:#5c3a1e;margin-top:1px">'+escHtml(d.method)+'</div>';
-        descHtml += '<div style="color:#8b6914;font-size:10px;margin-top:1px">' + 'Ref: '+escHtml(d.reference)+'</div>';
-        descHtml += '<div style="color:#808080;font-size:10px;margin-top:1px">' + escHtml(d.meaning)+'</div>';
+        descHtml += '<div style="color:#8b6914;font-size:10px;margin-top:1px">Ref: '+escHtml(d.reference)+'</div>';
+        descHtml += '<div style="color:#808080;font-size:10px;margin-top:1px">'+escHtml(d.meaning)+'</div>';
         descHtml += '</div>';
       }
     });
@@ -1074,7 +1083,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 eval_data = None
                 if result["gc_groups"]:
-                    eval_data = evaluate_generated(result["gc_groups"], lyrics, gongdiao)
+                    eval_data = evaluate_generated(result["gc_groups"], lyrics, gongdiao, reference_mode="transformer")
                 self._send_json({
                     "mode": "transformer",
                     "engine": "transformer",

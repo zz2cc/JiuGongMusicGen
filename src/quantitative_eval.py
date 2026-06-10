@@ -97,7 +97,7 @@ class QuantitativeEvaluator:
         print(f"综合评分: {result.overall_score:.0%}")
     """
 
-    # 风格相似度权重
+    # 风格相似度权重（LLM / 曲牌模式）
     STYLE_WEIGHTS = {
         "format_compliance": 0.15,
         "pitch_distribution": 0.25,
@@ -106,6 +106,13 @@ class QuantitativeEvaluator:
         "melisma_match": 0.10,
         "boundary_match": 0.10,
         "range_match": 0.10,
+    }
+
+    # 风格相似度权重（Transformer / 宫调模式，仅 3 个有效指标）
+    MODE_STYLE_WEIGHTS = {
+        "pitch_distribution": 0.45,
+        "interval_distribution": 0.30,
+        "range_match": 0.25,
     }
 
     # 声调在数据集中的典型分布（用于加权平均）
@@ -192,6 +199,34 @@ class QuantitativeEvaluator:
         },
     }
 
+    # 宫调模式指标说明（Transformer 模型使用 mode_features 作为参考）
+    MODE_METRIC_DESCRIPTIONS = {
+        "pitch_distribution": {
+            "label": "音高分布匹配",
+            "method": "Jensen-Shannon 散度 → 相似度 = 1/(1+√JS)。生成首音工尺分布 vs 该宫调在数据集中的音高分布",
+            "reference": "features_cache.json → mode_features[宫调].pitch_distribution（该宫调下所有曲目的工尺字频次归一化分布）",
+            "meaning": "衡量生成旋律的音高使用频率是否与该宫调的整体统计一致。0=完全不同, 1=完全一致",
+        },
+        "interval_distribution": {
+            "label": "音程分布匹配",
+            "method": "生成相邻音高差 7 分类（同音/级进/跳进/大跳）与宫调参考分布做余弦相似度(60%) + 级进比例差分(40%)",
+            "reference": "features_cache.json → mode_features[宫调].interval_distribution（该宫调已分类的 step_up/down/leap_up/down/big_up/down/same_pitch）",
+            "meaning": "衡量生成旋律的音程跳跃模式是否与该宫调的整体统计一致。0=完全不同, 1=完全一致",
+        },
+        "range_match": {
+            "label": "音域匹配",
+            "method": "min(生成音域跨度, 参考跨度) / max(生成音域跨度, 参考跨度)",
+            "reference": "features_cache.json → mode_features[宫调].pitch_range.min/max（该宫调在数据集中的最低和最高音高）",
+            "meaning": "衡量生成的音域是否在该宫调的合理范围内。0=严重偏离, 1=完全吻合",
+        },
+        "style_overall": {
+            "label": "风格相似度(宫调)",
+            "method": "3 个可用指标加权求和：音高分布 0.45 + 音程分布 0.30 + 音域 0.25。注：宫调级特征不含起收音/拖腔/密度数据，故不可用",
+            "reference": "features_cache.json → mode_features[宫调]（该宫调在 6563 首曲目中聚合统计）",
+            "meaning": "生成旋律与该宫调在音高使用、音程跳跃、音域三个维度上的整体相似程度",
+        },
+    }
+
     def __init__(self, features: Dict):
         """
         Args:
@@ -222,6 +257,7 @@ class QuantitativeEvaluator:
         qupai: str,
         raw_response: str = "",
         piece_id: str = "",
+        reference_mode: str = "llm",
     ) -> QuantitativeResult:
         """
         评估生成的旋律。
@@ -229,9 +265,10 @@ class QuantitativeEvaluator:
         Args:
             generated_groups: parse_compact_gongche() 返回的 LyricNoteGroup 列表
             lyrics: 原始输入歌词
-            qupai: 目标曲牌名
+            qupai: 目标曲牌名（或宫调名，当 reference_mode="transformer" 时）
             raw_response: LLM 原始响应（用于格式合规检测）
             piece_id: 作品标识
+            reference_mode: "llm"（曲牌评估）或 "transformer"（宫调评估）
 
         Returns:
             QuantitativeResult
@@ -255,12 +292,20 @@ class QuantitativeEvaluator:
         )
 
         # ---- 风格相似度评估 ----
-        result.style_scores = self._evaluate_style(
-            generated_groups, qupai, raw_response
-        )
-        result.style_overall = self._weighted_sum(
-            result.style_scores, self.STYLE_WEIGHTS
-        )
+        if reference_mode == "transformer":
+            result.style_scores = self._evaluate_style_mode(
+                generated_groups, qupai
+            )
+            result.style_overall = self._weighted_sum(
+                result.style_scores, self.MODE_STYLE_WEIGHTS
+            )
+        else:
+            result.style_scores = self._evaluate_style(
+                generated_groups, qupai, raw_response
+            )
+            result.style_overall = self._weighted_sum(
+                result.style_scores, self.STYLE_WEIGHTS
+            )
 
         # ---- 声调对齐度评估（规则 + 数据驱动）----
         tone_result = self._evaluate_tone_alignment(
@@ -307,13 +352,104 @@ class QuantitativeEvaluator:
     # 风格相似度
     # ========================================================================
 
+    def _evaluate_style_mode(
+        self,
+        groups: List[LyricNoteGroup],
+        gongdiao: str,
+    ) -> Dict[str, float]:
+        """宫调级风格评估（Transformer 模型专用，使用 mode_features）。
+
+        mode_features 的数据结构不同于 qupai_features：
+        - pitch_distribution: 已归一化 ({gc: prob})
+        - interval_distribution: 已分类 ({step_up: prob, ...})
+        - pitch_range: {min, max, mean, std}
+        - 不含: start_pitches, end_pitches, melisma, density
+        """
+        # 查找宫调 profile
+        mode_name = gongdiao.strip()
+        mode_prof = self.features.get("mode_features", {}).get(mode_name)
+        if not mode_prof:
+            # 尝试模糊匹配
+            for key in self.features.get("mode_features", {}):
+                if mode_name in key or key in mode_name:
+                    mode_prof = self.features["mode_features"][key]
+                    break
+        if not mode_prof:
+            # 退化为全局统计
+            logger.warning(f"宫调「{gongdiao}」不在 mode_features 中，退化为全局统计")
+            mode_prof = {}
+
+        scores = {}
+
+        # ---- 音高分布匹配 ----
+        gen_notes = []
+        for g in groups:
+            gen_notes.extend(n.gongche for n in g.notes if n.gongche in GONGCHE_TO_PITCH)
+        gen_dist = get_pitch_distribution(gen_notes)
+        if gen_dist and mode_prof:
+            ref_dist = mode_prof.get("pitch_distribution", {})
+            if ref_dist:
+                scores["pitch_distribution"] = self._js_divergence_score(gen_dist, ref_dist)
+            else:
+                scores["pitch_distribution"] = 0.5
+        elif gen_dist:
+            scores["pitch_distribution"] = 0.5
+        else:
+            scores["pitch_distribution"] = 0.0
+
+        # ---- 音程分布匹配 ----
+        gen_intervals = get_pitch_intervals(gen_notes)
+        if gen_intervals:
+            gen_cats = self._categorize_intervals(gen_intervals)
+            ref_cats = mode_prof.get("interval_distribution", {}) if mode_prof else {}
+            if ref_cats:
+                # ref_cats 通常是归一化的，字段名可能略有差异
+                # 标准化字段名
+                actual_keys = set(gen_cats.keys())
+                # 余弦相似度
+                cos_sim = self._cosine_similarity(
+                    [gen_cats.get(k, 0) for k in sorted(actual_keys)],
+                    [ref_cats.get(k, 0) for k in sorted(actual_keys)],
+                )
+                step_keys = ["step_up", "step_down", "same_pitch", "same"]
+                gen_step = sum(gen_cats.get(k, 0) for k in step_keys)
+                ref_step = sum(ref_cats.get(k, 0) for k in step_keys)
+                step_score = 1.0 - min(abs(gen_step - ref_step), 1.0)
+                scores["interval_distribution"] = 0.6 * max(cos_sim, 0.0) + 0.4 * step_score
+            else:
+                scores["interval_distribution"] = 0.5
+        else:
+            scores["interval_distribution"] = 0.0
+
+        # ---- 音域匹配 ----
+        gen_range = get_pitch_range(gen_notes)
+        gen_span = gen_range[1] - gen_range[0] if gen_notes else 0
+        if mode_prof:
+            pr = mode_prof.get("pitch_range", {})
+            ref_min = pr.get("min", 0)
+            ref_max = pr.get("max", 14)
+            ref_span = ref_max - ref_min
+            if ref_span > 0:
+                ratio = min(gen_span, ref_span) / max(gen_span, ref_span)
+                self._store_metric("gen_pitch_range", [gen_range[0], gen_range[1]])
+                self._store_metric("ref_pitch_range", [ref_min, ref_max])
+                scores["range_match"] = ratio
+            else:
+                scores["range_match"] = 0.8
+        elif 3 <= gen_span <= 14:
+            scores["range_match"] = 0.8
+        else:
+            scores["range_match"] = 0.5
+
+        return {k: round(v, 4) for k, v in scores.items()}
+
     def _evaluate_style(
         self,
         groups: List[LyricNoteGroup],
         qupai: str,
         raw_response: str,
     ) -> Dict[str, float]:
-        """计算所有风格指标"""
+        """计算所有风格指标（LLM 曲牌模式）"""
         scores = {}
 
         # 1. 格式合规率
@@ -1270,5 +1406,6 @@ def eval_result_to_dict(result: QuantitativeResult) -> Dict:
         "tone_data_overall": result.tone_data_overall,
         "metric_details": result.metric_details,
         "metric_descriptions": QuantitativeEvaluator.METRIC_DESCRIPTIONS,
+        "mode_metric_descriptions": QuantitativeEvaluator.MODE_METRIC_DESCRIPTIONS,
         "char_details": result.char_details[:100],
     }
