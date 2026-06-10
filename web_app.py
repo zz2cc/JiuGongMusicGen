@@ -373,15 +373,20 @@ pre{background:#2d2418;color:#e8dcc8;padding:14px;border-radius:8px;overflow-x:a
 <div class="tab" onclick="switchTab('features')">📊 曲牌特征</div>
 </div>
 <div id="tab-gongche" class="tab-content active card">
-<h2>生成旋律 — 工尺谱</h2>
-<div class="gongche-display" id="gongche-output"></div>
+<h2 id="gongche-tab-title">生成旋律 — 工尺谱</h2>
+<div id="trans-score-area" style="display:none">
+<div class="t-score" id="t-score"></div>
+<div style="font-size:11px;color:#8b6914;margin-top:4px" id="t-score-info"></div>
+<details style="margin-top:12px"><summary style="cursor:pointer;color:#8b6914;font-size:12px">📜 工尺谱文本 (点击展开)</summary>
+<div class="gongche-display" id="gongche-output" style="margin-top:6px;max-height:300px"></div>
+</details>
+</div>
+<div id="gongche-area">
+<div class="gongche-display" id="gongche-output-plain"></div>
 <div style="margin-top:10px">
 <a class="download-btn" id="dl-mxl" href="#" download="generated.musicxml">📥 下载 MusicXML</a>
 <a class="download-btn alt" id="dl-txt" href="#" download="generated.txt">📥 下载工尺谱</a>
 </div>
-<div id="trans-score-area" style="display:none">
-<div class="t-score" id="t-score"></div>
-<div style="font-size:11px;color:#8b6914;margin-top:4px" id="t-score-info"></div>
 </div>
 </div>
 <div id="tab-evaluation" class="tab-content card">
@@ -672,6 +677,9 @@ if(d.error){alert(d.error);b.disabled=false;b.textContent="🎵 生成音乐";re
 lastResult = d;
 if (d.mode === "transformer") {
   document.getElementById("compare-result-area").style.display = "none";
+  document.getElementById("gongche-area").style.display = "none";
+  document.getElementById("trans-score-area").style.display = "block";
+  document.getElementById("gongche-tab-title").textContent = "图形乐谱 — Transformer 生成";
   document.getElementById("result-area").style.display = "block";
   document.getElementById("status-line").innerHTML = "✅ Transformer 生成完成 · "+d.tokens+" 音符 · "+d.api_time+"s · "+d.n_groups+" 字音组";
   document.getElementById("result-status").innerHTML =
@@ -741,6 +749,8 @@ if (d.mode === "transformer") {
 if (d.mode === "compare") {
   // === 上部：Rich 数据填充正常 Tab 区 ===
   document.getElementById("trans-score-area").style.display = "none";
+  document.getElementById("gongche-area").style.display = "block";
+  document.getElementById("gongche-tab-title").textContent = "生成旋律 — 工尺谱";
   document.getElementById("result-area").style.display = "block";
   document.getElementById("compare-result-area").style.display = "block";
 
@@ -752,7 +762,7 @@ if (d.mode === "compare") {
 
   // 工尺谱 Tab — Rich
   var rawRich = d.rich.raw_response || "";
-  document.getElementById("gongche-output").innerHTML =
+  document.getElementById("gongche-output-plain").innerHTML =
     "<pre style=\"background:transparent;color:#5c2e0e;font-size:16px;line-height:2;letter-spacing:2px;max-height:500px;white-space:pre-wrap;padding:0;margin:0;\">" + escHtml(rawRich) + "</pre>";
 
   // 提示词 / 原始响应 / 曲牌特征 Tab — Rich
@@ -831,6 +841,8 @@ if (d.mode === "compare") {
 }
 document.getElementById("compare-result-area").style.display = "none";
 document.getElementById("trans-score-area").style.display = "none";
+document.getElementById("gongche-area").style.display = "block";
+document.getElementById("gongche-tab-title").textContent = "生成旋律 — 工尺谱";
 document.getElementById("result-area").style.display = "block";
 document.getElementById("status-line").innerHTML = "Complete - "+d.tokens+" tokens - "+d.api_time+"s - "+d.n_groups+" groups";
 document.getElementById("result-status").innerHTML =
@@ -839,7 +851,7 @@ document.getElementById("result-status").innerHTML =
 document.getElementById("result-area").style.display = "block";
 
 var raw = d.raw_response || "";
-document.getElementById("gongche-output").innerHTML =
+document.getElementById("gongche-output-plain").innerHTML =
   "<pre style=\"background:transparent;color:#5c2e0e;font-size:16px;line-height:2;letter-spacing:2px;max-height:500px;white-space:pre-wrap;padding:0;margin:0;\">" + escHtml(raw) + "</pre>";
 
 document.getElementById("sys-prompt").textContent = d.system_prompt;
